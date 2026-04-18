@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ai-guide-backend
+    ports:
+      - "5000:5000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DATABASE_URL=sqlite:///./data/ai_guide.db
+      - CHROMA_DB_DIR=/app/data/chroma_db
+      - UPLOAD_DIR=/app/data/uploads
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  nginx:
+    image: nginx:alpine
+    container_name: ai-guide-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./frontend-tourist:/usr/share/nginx/html/tourist:ro
+      - ./frontend-admin:/usr/share/nginx/html/admin:ro
+    depends_on:
+      - backend
+    restart: unless-stopped

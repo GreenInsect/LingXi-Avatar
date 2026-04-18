@@ -1,0 +1,13 @@
+.env
+node_modules/
+dist/
+build/
+*.log
+.vscode/
+__pycache__/
+*.pyc
+.db
+tmp*
+chroma_db/
+knowledge_base/
+uploads/
