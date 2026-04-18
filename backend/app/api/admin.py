@@ -38,7 +38,7 @@ async def system_health():
 class AvatarConfigCreate(BaseModel):
     name: str
     avatar_type: str = "guide_female"
-    voice_id: str = "zh-CN-XiaoxiaoNeural"
+    voice_id: str = "Cherry"
     personality: str = "热情友善、知识渊博、善于沟通，具有亲和力"
     greeting: str = "您好！我是灵山胜境AI导游小慧，很高兴为您服务！"
 
@@ -50,7 +50,7 @@ async def list_avatars(db: Session = Depends(get_db)):
         default = AvatarConfig(
             name="小慧",
             avatar_type="guide_female",
-            voice_id="zh-CN-XiaoxiaoNeural",
+            voice_id="Cherry",
             personality="热情友善、知识渊博、善于沟通，说话亲切自然，擅长将景区故事娓娓道来",
             greeting="您好！我是灵山胜境AI导游小慧 🌸，很高兴为您服务！请问您想了解什么？",
             is_active=True,

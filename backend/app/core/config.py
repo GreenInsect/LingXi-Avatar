@@ -42,6 +42,7 @@ class Settings(BaseSettings):
 
     # 语音合成 
     TTS_PROVIDER: str = "edge-tts"
+    TTS_MODEL: str = "qwen3-tts-flash"
 
     # 数字人 
     DEFAULT_AVATAR: str = "guide_female"

@@ -87,7 +87,7 @@ async def send_message(request: ChatRequest, db: Session = Depends(get_db)):
     audio_base64 = None
     audio_duration = None
     if request.with_audio and not request.image_base64:  # 图片分析不需要 TTS
-        voice_id = avatar_config_db.voice_id if avatar_config_db else "zh-CN-XiaoxiaoNeural"
+        voice_id = avatar_config_db.voice_id if avatar_config_db else "Cherry"
         tts_result = await synthesize_speech(
             text=agent_result["reply"],
             voice_id=voice_id,

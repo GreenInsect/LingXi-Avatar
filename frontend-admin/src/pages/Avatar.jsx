@@ -10,7 +10,7 @@ const DEFAULT_FORM = {
   avatar_type: 'guide_female',
   personality: '热情友善、知识渊博、善于沟通，具有亲和力，善于将历史故事娓娓道来',
   greeting: '您好！我是景区AI导游小慧，很高兴为您服务！请问您想了解什么？',
-  voice_id: 'zh-CN-XiaoxiaoNeural',
+  voice_id: 'Cherry',
 }
 
 export default function Avatar({ showToast }) {
@@ -165,7 +165,7 @@ export default function Avatar({ showToast }) {
                   <option key={v.id} value={v.id}>{v.name}（{v.style}）</option>
                 ))
                 : <>
-                  <option value="zh-CN-XiaoxiaoNeural">晓晓（温柔亲切）</option>
+                  <option value="Cherry">晓晓（温柔亲切）</option>
                   <option value="zh-CN-XiaohanNeural">晓涵（活泼开朗）</option>
                   <option value="zh-CN-YunxiNeural">云希（阳光活力）</option>
                   <option value="zh-CN-YunjianNeural">云健（磁性稳重）</option>
