@@ -136,7 +136,7 @@ const genericParameterCatalog = [
   { id: 'ParamMouthForm', label: 'Mouth Form', prompt: 'shape the mouth toward smile or pout', fallbackMin: -1, fallbackMax: 1 },
 ] as const;
 
-const expressionAssetModules = import.meta.glob('../../../public/live2D/**/*.exp3.json', {
+const expressionAssetModules = import.meta.glob('../../public/live2D/**/*.exp3.json', {
   eager: true,
   query: '?url',
   import: 'default',

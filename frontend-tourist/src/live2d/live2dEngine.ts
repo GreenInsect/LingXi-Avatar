@@ -332,11 +332,24 @@ export async function createLive2DRuntime(
 
   const rawSettings = await fetchJson<Record<string, unknown>>(avatar.modelJson);
   const settings = createAugmentedSettings(rawSettings, avatar);
+  document.getElementById('live2d-container')?.appendChild(app.view);
   const model = await Live2DModel.from(settings, {
     autoInteract: false,
   });
-
   app.stage.addChild(model);
+  app.stage.interactive = true;
+  // app.stage.on('pointermove', (event) => {
+  //     model.focus(event.global.x, event.global.y);
+  // });
+  app.stage.on('pointermove', (event) => {
+    // 兼容处理：优先找 v6 的 event.data.global，找不到再找 v7 的 event.global
+    const globalX = event.data?.global?.x ?? event.global?.x;
+    const globalY = event.data?.global?.y ?? event.global?.y;
+
+    if (globalX !== undefined && globalY !== undefined) {
+        model.focus(globalX, globalY);
+    }
+});
   model.scale.set(1);
 
   const localBounds = model.getLocalBounds();

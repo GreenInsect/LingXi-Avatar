@@ -220,6 +220,22 @@ export function Live2DStage({
       resetRuntimeFocus(runtimeRef.current);
     }
   }
+  function handleWheel(event: React.WheelEvent<HTMLDivElement>) {
+
+    const zoomSensitivity = 0.001; 
+    const delta = event.deltaY * zoomSensitivity;
+
+    const nextScale = clamp(
+      transform.scale - delta,
+      0.05, 
+      8     
+    );
+
+    onTransformChange({
+      ...transform,
+      scale: nextScale,
+    });
+  }
 
   return (
     <div
@@ -229,9 +245,10 @@ export function Live2DStage({
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       onPointerLeave={handlePointerLeave}
+      onWheel={handleWheel}
     >
       <div ref={containerRef} className="stage-canvas" />
-      <div className="stage-hint">Move mouse to guide gaze. Drag to move. Hold Shift and drag to scale.</div>
+      {/* <div className="stage-hint">Move mouse to guide gaze. Drag to move. Hold Shift and drag to scale.</div> */}
       <div className="stage-status">{status}</div>
     </div>
   );
