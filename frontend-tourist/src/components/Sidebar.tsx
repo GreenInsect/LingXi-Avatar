@@ -6,6 +6,7 @@ const NAV: NavEntry[] = [
   { id: 'home',      icon: '🏠', label: '景区首页' },
   { id: 'spots',     icon: '📍', label: '核心景点' },
   { id: 'routes',    icon: '🗺️', label: '游览路线' },
+  { id: 'map',       icon: '🧭', label: '地图导航' },
   { id: 'nianhewan', icon: '🌸', label: '拈花湾小镇' },
   { id: 'info',      icon: 'ℹ️', label: '游览指南' },
   { id: 'history',   icon: '📜', label: '历史文化' },

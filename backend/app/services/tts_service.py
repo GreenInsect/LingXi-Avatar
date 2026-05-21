@@ -1,30 +1,19 @@
 """
-语音合成服务 - 支持 edge-tts 和 OpenAI TTS
-TODO 待修改为国内 TTS 服务
+语音合成服务 - 阿里云 DashScope Qwen-TTS
 """
-import asyncio
-import contextlib
-import os
 import io
-import uuid
 import base64
-from typing import Optional
+import contextlib
 import wave
 
 import httpx
-from app.core.config import settings
 import dashscope
+from app.core.config import settings
+
 
 async def synthesize_speech(text: str, voice_id: str = "Cherry", emotion: str = None):
-    """
-    兼容原有的 synthesize_speech 调用方式
-    对接阿里云 Qwen-TTS 并返回 base64 和 duration
-    """
-    # 转换 emotion（可选）：如果你的系统有情绪映射，可以在此处理
-    # qwen-tts-instruct-flash 支持指令控制情绪
-    
+    """对接阿里云 Qwen-TTS 并返回 base64 和 duration"""
     try:
-        # 1. 调用阿里云接口 
         response = dashscope.MultiModalConversation.call(
             model="qwen3-tts-flash",
             text=text,
@@ -38,83 +27,39 @@ async def synthesize_speech(text: str, voice_id: str = "Cherry", emotion: str = 
 
         audio_url = response.output.audio.url
 
-        # 2. 异步下载音频数据
         async with httpx.AsyncClient() as client:
             resp = await client.get(audio_url)
             resp.raise_for_status()
             audio_data = resp.content
 
-        # 3. 计算音频时长 (WAV 格式)
-        # 通过 wave 库读取字节流信息
+        # 计算音频时长：优先 WAV 头解析，异常时字数估算
+        audio_size = len(audio_data)
         duration = 0
-        with contextlib.closing(wave.open(io.BytesIO(audio_data), 'rb')) as f:
-            frames = f.getnframes()
-            rate = f.getframerate()
-            duration = frames / float(rate)
+        # 检查 WAV RIFF 头
+        if audio_size > 44 and audio_data[:4] == b'RIFF':
+            try:
+                with contextlib.closing(wave.open(io.BytesIO(audio_data), 'rb')) as f:
+                    frames = f.getnframes()
+                    rate = f.getframerate()
+                    if 8000 <= rate <= 48000 and 0 < frames < audio_size:
+                        duration = frames / float(rate)
+            except Exception:
+                pass
+        if duration <= 0:
+            duration = len(text) / 4.0  # 中文约4字/秒
 
-        # 4. 转为 Base64
         audio_base64 = base64.b64encode(audio_data).decode('utf-8')
 
         return {
             "audio_base64": audio_base64,
             "duration": duration,
-            "url": audio_url  # 额外保留 URL 备用
+            "audio_data": audio_data,  # 原始 WAV 字节，供 ML 嘴型模型
         }
 
     except Exception as e:
-        print(f"❌ TTS 兼容层异常: {e}")
+        print(f"❌ TTS 异常: {e}")
         return {"audio_base64": None, "duration": 0}
 
-
-
-async def _edge_tts_synthesize(text: str, voice_id: str, emotion: str) -> dict:
-    """使用edge-tts合成（免费，无需API key）"""
-    import edge_tts
-    
-    # 情感映射到edge-tts风格
-    style_map = {
-        "happy": "cheerful",
-        "enthusiastic": "excited", 
-        "gentle": "gentle",
-        "professional": "newscast",
-        "curious": "friendly-chat",
-        "sad": "empathetic"
-    }
-    
-    # edge-tts语音列表（中文）
-    voice_options = {
-        "Cherry": "Cherry",  # 女声，温柔
-        "zh-CN-YunxiNeural": "zh-CN-YunxiNeural",         # 男声
-        "zh-CN-XiaohanNeural": "zh-CN-XiaohanNeural",    # 女声，活泼
-        "zh-CN-YunjianNeural": "zh-CN-YunjianNeural",     # 男声，磁性
-    }
-    
-    voice = voice_options.get(voice_id, "Cherry")
-    
-    # 生成临时文件
-    temp_file = f"/tmp/tts_{uuid.uuid4().hex}.mp3"
-    
-    communicate = edge_tts.Communicate(text, voice, rate="+5%", pitch="+2Hz")
-    await communicate.save(temp_file)
-    
-    # 读取并转换为base64
-    with open(temp_file, "rb") as f:
-        audio_data = f.read()
-    
-    # 清理临时文件
-    os.remove(temp_file)
-    
-    audio_base64 = base64.b64encode(audio_data).decode("utf-8")
-    
-    # 估算时长（粗略：中文每分钟约200字）
-    duration = len(text) / 200 * 60
-    
-    return {
-        "audio_base64": audio_base64,
-        "duration": duration,
-        "format": "mp3",
-        "voice": voice
-    }
 
 def get_available_voices() -> list:
     """获取可用语音列表"""

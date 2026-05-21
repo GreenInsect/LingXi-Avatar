@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from 'react'
 import { sendMessage, newSession } from '../services/api'
 import type { ChatMessage, AvatarEmotion } from '../types'
+import { parseEmotionTags } from '../live2d/avatarManifest.ts'
 
 interface UseChatParams {
   sessionId: string | null
@@ -78,15 +79,18 @@ export function useChat({ sessionId, setSessionId }: UseChatParams): UseChatRetu
           withAudio: true,
         })
 
-        addMessage('assistant', data.reply, {
+        // 清洗 [emotion] 标签，提取情绪关键词
+        const { cleanText, emotions } = parseEmotionTags(data.reply)
+
+        addMessage('assistant', cleanText, {
           emotion: data.avatar_emotion,
           knowledgeUsed: data.knowledge_used,
         })
         setAvatarEmotion(data.avatar_emotion ?? 'happy')
 
-        if (data.audio_base64) playAudio(data.audio_base64)
+        const audioEl = data.audio_base64 ? playAudio(data.audio_base64) : undefined
 
-        return data
+        return { ...data, reply: cleanText, emotions, audioEl }
       } catch {
         addMessage('assistant', '抱歉，遇到了一点问题，请稍后再试～ 😅', { emotion: 'gentle' })
         throw new Error('Send failed')

@@ -79,6 +79,8 @@ export type AvatarManifest = {
   parameterControls?: AvatarParameterControl[];
   motions?: Record<string, MotionBinding>;
   watermark?: WatermarkBinding;
+  /** emotion keyword → expression label(s) for [emotion] tag look-up */
+  motionIndex?: Record<string, string>;
 };
 
 type AvatarResolver = () => Promise<AvatarManifest>;
@@ -555,6 +557,36 @@ export const avatars: Record<string, AvatarManifest> = {
       wave: { file: publicAsset('live2D/yumi/wave.motion3.json') },
       tear: { file: publicAsset('live2D/yumi/tear.motion3.json') },
     },
+    motionIndex: {
+      anger: '黑脸',
+      angry: '黑脸',
+      happy: '星星眼',
+      smile: '星星眼',
+      joy: '星星眼',
+      laugh: '星星眼',
+      surprise: '蚊香眼',
+      shock: '蚊香眼',
+      amazed: '蚊香眼',
+      sad: '眼泪',
+      cry: '泪汪汪',
+      upset: '眼泪',
+      love: '爱心眼',
+      heart: '爱心眼',
+      adore: '爱心眼',
+      playful: '舌头伸出',
+      silly: '猫猫嘴',
+      tease: '歪嘴',
+      smug: '歪嘴',
+      proud: '歪嘴',
+      confused: '蚊香眼',
+      think: '蚊香眼',
+      curious: '蚊香眼',
+      shy: '泪汪汪',
+      nervous: '泪汪汪',
+      neutral: 'neutral',
+      wave: '抬手右',
+      greet: '抬手右',
+    },
   }),
   ellen: baseAvatar({
     id: 'ellen',
@@ -698,14 +730,6 @@ export function getAvatarExpression(avatar: AvatarManifest, expressionId: Expres
   return avatar.expressions.find((expressionItem) => expressionItem.id === expressionId);
 }
 
-export function getAvatarExpressionIds(avatar: AvatarManifest) {
-  return avatar.expressions.map((expressionItem) => expressionItem.id);
-}
-
-export function getAvatarExpressionLabel(avatar: AvatarManifest, expressionId: ExpressionId) {
-  return getAvatarExpression(avatar, expressionId)?.label ?? expressionId;
-}
-
 export function getAvatarNeutralExpressionId(avatar: AvatarManifest) {
   return avatar.expressions.find((expressionItem) => expressionItem.id === 'neutral')?.id
     ?? avatar.expressions[0]?.id
@@ -714,6 +738,25 @@ export function getAvatarNeutralExpressionId(avatar: AvatarManifest) {
 
 export function hasAvatarExpression(avatar: AvatarManifest, expressionId: ExpressionId) {
   return avatar.expressions.some((expressionItem) => expressionItem.id === expressionId);
+}
+
+/** 根据 [emotion] 关键词从 motionIndex 查找对应的 expression id */
+export function resolveExpressionByKeyword(avatar: AvatarManifest, keyword: string): ExpressionId | null {
+  const label = avatar.motionIndex?.[keyword.toLowerCase()];
+  if (!label) return null;
+  if (label === 'neutral') return getAvatarNeutralExpressionId(avatar);
+  const expr = avatar.expressions.find(e => e.label === label);
+  return expr?.id ?? null;
+}
+
+/** 从 AI 回复文本中提取 [emotion] 标签，返回 { cleanText, emotions } */
+export function parseEmotionTags(text: string): { cleanText: string; emotions: string[] } {
+  const emotions: string[] = [];
+  const cleanText = text.replace(/\[(\w+)\]/g, (_match, keyword) => {
+    emotions.push(keyword.toLowerCase());
+    return '';
+  });
+  return { cleanText: cleanText.replace(/\s{2,}/g, ' ').trim(), emotions };
 }
 
 export function getAvatarParameterControl(avatar: AvatarManifest, parameterId: ParameterId) {

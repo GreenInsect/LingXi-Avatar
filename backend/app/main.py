@@ -61,12 +61,12 @@ async def root():
     return {
         "system": "灵山胜境 AI 数字人导游",
         "version": "2.1.0",
-        "inference_backend": "vLLM",
+        "inference_backend": "DashScope API + 本地Embedding",
         "agent": "LangGraph + Qwen3",
         "features": ["RAG知识库", "图像理解(VL)", "意图路由", "情感分析"],
-        "vllm_endpoints": {
-            "chat":  settings.VLLM_CHAT_BASE_URL,
-            "vl":    settings.VLLM_VL_BASE_URL,
+        "endpoints": {
+            "chat":  settings.DASHSCOPE_BASE_URL,
+            "vl":    settings.DASHSCOPE_BASE_URL,
             "embed": settings.VLLM_EMBED_BASE_URL,
         },
     }

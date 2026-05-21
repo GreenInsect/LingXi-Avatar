@@ -145,11 +145,11 @@ function getOverlayFactor(paramId: string, hasExplicitTarget: boolean) {
   }
 
   if (/^ParamMouthOpenY$/i.test(paramId)) {
-    return hasExplicitTarget ? 0.22 : 0.14;
+    return 1.0;  // 即时跟随，ML 已做平滑
   }
 
   if (/^ParamMouthForm$/i.test(paramId)) {
-    return hasExplicitTarget ? 0.18 : 0.12;
+    return 1.0;
   }
 
   return hasExplicitTarget ? 0.16 : 0.1;

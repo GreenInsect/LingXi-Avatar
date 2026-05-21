@@ -1,6 +1,5 @@
 """
-AI核心服务 - 支持 DeepSeek（主）/ Anthropic Claude（备）
-DeepSeek 兼容 OpenAI SDK，通过 base_url 切换即可。
+AI核心服务 - DashScope API (OpenAI 兼容接口)
 """
 import json
 import re
@@ -9,26 +8,16 @@ from openai import AsyncOpenAI
 from app.core.config import settings
 from app.services.knowledge_service import KnowledgeService
 
-# ── 客户端初始化 ──────────────────────────────────────────────
-def _make_client() -> AsyncOpenAI:
-    if settings.AI_PROVIDER == "deepseek":
-        return AsyncOpenAI(
-            api_key=settings.DEEPSEEK_API_KEY,
-            base_url=settings.DEEPSEEK_BASE_URL,
-        )
-    # anthropic openai-compat 备用（同结构）
-    return AsyncOpenAI(
-        api_key=settings.DEEPSEEK_API_KEY,
-        base_url=settings.DEEPSEEK_BASE_URL,
-    )
-
-def _model() -> str:
-    return settings.DEEPSEEK_MODEL  # "deepseek-chat" 或 "deepseek-reasoner"
-
-client: AsyncOpenAI = _make_client()
 knowledge_service = KnowledgeService()
 
-# ── System Prompt 模板 ────────────────────────────────────────
+client = AsyncOpenAI(
+    api_key=settings.DASHSCOPE_API_KEY,
+    base_url=settings.DASHSCOPE_BASE_URL,
+)
+
+_MODEL = settings.QWEN_MODEL  # qwen-plus
+
+# ── System Prompt 模板 ─
 SYSTEM_PROMPT_TEMPLATE = """你是{avatar_name}，{scenic_name}的AI数字人导游。你具备以下特质：
 {personality}
 
@@ -44,7 +33,11 @@ SYSTEM_PROMPT_TEMPLATE = """你是{avatar_name}，{scenic_name}的AI数字人导
 回答要求：
 - 语言自然流畅，口语化，适合语音播放
 - 每次回答控制在150字以内，除非游客要求详细介绍
-- 在回答最开头用【情感标签】标注当前情绪（只选一个）：【开心】【好奇】【温柔】【专业】【热情】
+- 【重要】每条回复必须且至少包含两个[emotion]标签！标签必须放在回复文本的开头或情绪转换处
+  可用标签： [happy] [anger] [sad] [surprise] [love] [confused] [shy] [proud] [neutral]
+  示例："[happy]哇！这个景点太美了，您知道吗它有一千多年历史了。"
+  错误示例（缺少标签，不允许）："这个景点很美，有一千多年历史。"
+  不要连续重复使用同一个标签
 - 适当使用"哇"、"其实"、"您知道吗"等口语化表达增加亲切感
 - 推荐路线时给出具体建议，如"建议您先去...，再到..."
 
@@ -52,11 +45,12 @@ SYSTEM_PROMPT_TEMPLATE = """你是{avatar_name}，{scenic_name}的AI数字人导
 游客兴趣偏好：{interests}
 """
 
-# ── 情感分析 ─────────────────────────────────────────────────
+
+# ── 情感分析 ─
 async def analyze_emotion(text: str) -> dict:
     try:
         resp = await client.chat.completions.create(
-            model=_model(),
+            model=_MODEL,
             max_tokens=200,
             temperature=0.0,
             messages=[
@@ -76,7 +70,7 @@ async def analyze_emotion(text: str) -> dict:
         return {"emotion": "neutral", "sentiment_score": 0.5, "intensity": "low"}
 
 
-# ── 主对话（非流式）──────────────────────────────────────────
+# ── 主对话（非流式）─
 async def get_ai_response(
     message: str,
     session_id: str,
@@ -104,24 +98,33 @@ async def get_ai_response(
     messages.append({"role": "user", "content": message})
 
     resp = await client.chat.completions.create(
-        model=_model(),
+        model=_MODEL,
         max_tokens=500,
         temperature=0.7,
         messages=messages,
     )
     reply = resp.choices[0].message.content.strip()
 
-    # 提取并移除情感标签
-    emotion_map = {
-        "开心": "happy", "好奇": "curious", "温柔": "gentle",
-        "专业": "professional", "热情": "enthusiastic", "惊喜": "surprised",
+    # 从 [emotion] 标签提取 avatar_emotion（保留标签在文本中供前端解析）
+    import re as regex
+    tag_to_emotion = {
+        "happy": "happy", "anger": "enthusiastic", "sad": "gentle",
+        "surprise": "surprised", "love": "happy", "playful": "enthusiastic",
+        "confused": "curious", "shy": "gentle", "proud": "professional",
+        "neutral": "gentle",
     }
     detected_emotion = "happy"
-    for cn, en in emotion_map.items():
-        if f"【{cn}】" in reply:
-            detected_emotion = en
-            reply = reply.replace(f"【{cn}】", "").strip()
-            break
+    found_tags = regex.findall(r"\[(\w+)\]", reply)
+    if found_tags:
+        first_tag = found_tags[0].lower()
+        detected_emotion = tag_to_emotion.get(first_tag, "happy")
+    else:
+        # 兜底：AI 没加标签时，根据回复内容自动插入
+        emotion_to_tag = {"happy": "happy", "enthusiastic": "happy", "curious": "confused",
+                          "gentle": "neutral", "professional": "neutral", "surprised": "surprise"}
+        fallback_tag = emotion_to_tag.get(detected_emotion, "happy")
+        reply = f"[{fallback_tag}] {reply}"
+        found_tags = [fallback_tag]
 
     visitor_emotion = await analyze_emotion(message)
 
@@ -133,7 +136,7 @@ async def get_ai_response(
     }
 
 
-# ── 流式对话 ─────────────────────────────────────────────────
+# ── 流式对话 ─
 async def stream_ai_response(
     message: str,
     history: list,
@@ -159,7 +162,7 @@ async def stream_ai_response(
     messages.append({"role": "user", "content": message})
 
     stream = await client.chat.completions.create(
-        model=_model(),
+        model=_MODEL,
         max_tokens=500,
         temperature=0.7,
         messages=messages,
@@ -171,7 +174,7 @@ async def stream_ai_response(
             yield delta
 
 
-# ── 情感报告生成 ─────────────────────────────────────────────
+# ── 情感报告生成 ─
 async def generate_sentiment_report(conversations: list) -> dict:
     if not conversations:
         return {}
@@ -181,7 +184,7 @@ async def generate_sentiment_report(conversations: list) -> dict:
     )
 
     resp = await client.chat.completions.create(
-        model=_model(),
+        model=_MODEL,
         max_tokens=1000,
         temperature=0.3,
         messages=[

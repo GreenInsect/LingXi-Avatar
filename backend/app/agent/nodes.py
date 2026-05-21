@@ -16,13 +16,13 @@ TODO Tools 集成（如天气查询、地图导航等实用工具）
 from __future__ import annotations
 
 import re
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.state import AgentState
 from app.agent.qwen_client import qwen_client
 from app.agent.rag_service import rag_service
 
-# 导游人设 System Prompt 
+# 导游人设 System Prompt
 GUIDE_SYSTEM = """你是灵山胜境的AI数字人导游"小慧"，性格热情友善、知识渊博、善于沟通。
 
 你的职责：
@@ -33,7 +33,11 @@ GUIDE_SYSTEM = """你是灵山胜境的AI数字人导游"小慧"，性格热情�
 
 回答规范：
 - 语言自然流畅，口语化，适合语音播放，每次回答控制在200字以内
-- 在回答最开头用【情感标签】标注当前情绪（仅选其一）：【开心】【好奇】【温柔】【专业】【热情】
+- 【重要】每条回复必须以[emotion]标签开头，且包含两到三个[emotion标签]可用的英文标签：
+  [happy] 开心 [anger] 生气 [sad] 悲伤 [surprise] 惊喜 [love] 喜爱
+  [confused] 困惑 [shy] 害羞 [proud] 自豪 [neutral] 中性
+  示例："[happy]哇！灵山大佛太壮观了，您知道吗它有88米高呢～"
+  错误（缺少标签）："哇！灵山大佛太壮观了..."
 - 适当使用"您知道吗"、"其实"、"哇"等口语化表达增加亲切感
 - 推荐路线时给出具体建议，如"建议您先去...，再到..."
 - 图像分析时结合景区知识给出专业解读"""
@@ -135,7 +139,7 @@ async def image_analyzer(state: AgentState) -> dict:
         f"游客问题：{user_input}\n\n"
         f"请识别图片中的景点/建筑/佛像，说明其历史文化意义，并给出参观小贴士。"
         f"回答控制在150字以内，语言亲切自然。"
-        f"回答开头加【情感标签】：【开心】【好奇】【专业】中选一个。"
+        f"【重要】回答开头必须包含一个[emotion]标签（如[happy]/[surprise]/[neutral]）。"
     )
 
     try:
@@ -145,9 +149,12 @@ async def image_analyzer(state: AgentState) -> dict:
             temperature=0.5,
             max_tokens=300,
         )
-        # 提取情感标签
+        # 提取情感标签（保留 [emotion] 给前端，只清理旧版【】）
         emotion = _extract_emotion(vl_reply)
-        reply = _strip_emotion_tag(vl_reply)
+        if not re.findall(r"\[(\w+)\]", vl_reply):
+            vl_reply = f"[happy] {vl_reply}"
+            emotion = "happy"
+        reply = re.sub(r"【(开心|好奇|温柔|专业|热情|惊喜)】\s*", "", vl_reply).strip()
 
         return {
             "final_reply": reply,
@@ -251,15 +258,22 @@ async def response_generator(state: AgentState) -> dict:
     try:
         reply = await qwen_client.chat(messages, temperature=0.7, max_tokens=400)
     except Exception as e:
-        reply = f"【温柔】非常抱歉，我暂时遇到了一些技术问题 😊 您可以稍后再试，或者直接前往景区服务中心，工作人员会热情为您服务的！"
+        reply = f"[gentle] 非常抱歉，我暂时遇到了一些技术问题 😊 您可以稍后再试，或者直接前往景区服务中心，工作人员会热情为您服务的！"
         return {
-            "final_reply": _strip_emotion_tag(reply),
+            "final_reply": reply,
             "avatar_emotion": "gentle",
             "agent_steps": [f"[回复生成] 模型调用失败: {e}，使用兜底回复"],
         }
 
     emotion = _extract_emotion(reply)
-    clean_reply = _strip_emotion_tag(reply)
+
+    # 保留 [emotion] 标签供前端解析，只清理旧版【】标签
+    found_tags = re.findall(r"\[(\w+)\]", reply)
+    if not found_tags:
+        reply = f"[happy] {reply}"
+        emotion = "happy"
+
+    clean_reply = re.sub(r"【(开心|好奇|温柔|专业|热情|惊喜)】\s*", "", reply).strip()
 
     return {
         "final_reply": clean_reply,
@@ -286,19 +300,16 @@ async def fallback_handler(state: AgentState) -> dict:
     }
 
 
-# 工具函数 
+# 工具函数
 def _extract_emotion(text: str) -> str:
-    """从回复文本中提取情感标签"""
-    emotion_map = {
-        "开心": "happy", "好奇": "curious", "温柔": "gentle",
-        "专业": "professional", "热情": "enthusiastic", "惊喜": "surprised",
+    """从回复文本中提取 [emotion] 标签，映射到 avatar_emotion"""
+    tag_to_emotion = {
+        "happy": "happy", "anger": "enthusiastic", "sad": "gentle",
+        "surprise": "surprised", "love": "happy", "playful": "enthusiastic",
+        "confused": "curious", "shy": "gentle", "proud": "professional",
+        "neutral": "gentle",
     }
-    for cn, en in emotion_map.items():
-        if f"【{cn}】" in text:
-            return en
+    found = re.findall(r"\[(\w+)\]", text)
+    if found:
+        return tag_to_emotion.get(found[0].lower(), "happy")
     return "happy"
-
-
-def _strip_emotion_tag(text: str) -> str:
-    """移除情感标签，返回干净的回复文本"""
-    return re.sub(r"【(开心|好奇|温柔|专业|热情|惊喜)】\s*", "", text).strip()

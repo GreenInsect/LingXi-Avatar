@@ -2,6 +2,7 @@ import type { PageId } from '../types'
 import HomePage from '../pages/HomePage'
 import SpotsPage from '../pages/SpotsPage'
 import RoutesPage from '../pages/RoutesPage'
+import MapPage from '../pages/MapPage'
 import { NianheWanPage, InfoPage, HistoryPage } from '../pages/OtherPages'
 
 interface MainContentProps {
@@ -14,6 +15,7 @@ export default function MainContent({ activePage, onNavigate }: MainContentProps
     home:      <HomePage onNavigate={onNavigate} />,
     spots:     <SpotsPage />,
     routes:    <RoutesPage />,
+    map:       <MapPage />,
     nianhewan: <NianheWanPage />,
     info:      <InfoPage />,
     history:   <HistoryPage />,

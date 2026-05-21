@@ -41,6 +41,7 @@ class ChatResponse(BaseModel):
     knowledge_used: bool = False
     intent: str = "qa"
     agent_steps: list = []
+    mouth_shapes: list = []
     timestamp: str
 
 
@@ -83,18 +84,35 @@ async def send_message(request: ChatRequest, db: Session = Depends(get_db)):
         avatar_config=avatar_dict,
     )
 
-    # 语音合成
+    # 语音合成（先洗掉 [emotion] 标签，避免 TTS 读出来）
     audio_base64 = None
     audio_duration = None
-    if request.with_audio and not request.image_base64:  # 图片分析不需要 TTS
+    mouth_shapes = []
+    if request.with_audio and not request.image_base64:
+        import re
+        tts_text = re.sub(r"\s*\[(\w+)\]\s*", "", agent_result["reply"]).strip()
         voice_id = avatar_config_db.voice_id if avatar_config_db else "Cherry"
         tts_result = await synthesize_speech(
-            text=agent_result["reply"],
+            text=tts_text,
             voice_id=voice_id,
             emotion=agent_result["avatar_emotion"],
         )
         audio_base64 = tts_result.get("audio_base64")
         audio_duration = tts_result.get("duration")
+
+        # 嘴型分析：优先 ML 模型，回退规则版
+        audio_data = tts_result.get("audio_data")
+        if audio_data:
+            try:
+                from app.services.mouth_ml import analyze_mouth_shapes_ml
+                mouth_shapes = analyze_mouth_shapes_ml(audio_data)
+            except Exception as e:
+                print(f"[chat] ML mouth failed, fallback to rule: {e}")
+                from app.services.mouth_shape import analyze_mouth_shapes
+                mouth_shapes = analyze_mouth_shapes(tts_text)
+        else:
+            from app.services.mouth_shape import analyze_mouth_shapes
+            mouth_shapes = analyze_mouth_shapes(tts_text)
 
     # 持久化对话记录
     visitor_emotion = agent_result.get("visitor_emotion", {})
@@ -130,6 +148,7 @@ async def send_message(request: ChatRequest, db: Session = Depends(get_db)):
         knowledge_used=agent_result.get("knowledge_used", False),
         intent=agent_result.get("intent", "qa"),
         agent_steps=agent_result.get("agent_steps", []),
+        mouth_shapes=mouth_shapes,
         timestamp=datetime.utcnow().isoformat(),
     )
 
@@ -189,6 +208,7 @@ async def send_image_message(
         knowledge_used=agent_result.get("knowledge_used", False),
         intent="image",
         agent_steps=agent_result.get("agent_steps", []),
+        mouth_shapes=[],
         timestamp=datetime.utcnow().isoformat(),
     )
 

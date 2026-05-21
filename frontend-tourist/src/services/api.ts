@@ -1,7 +1,6 @@
 import type {
   ChatApiResponse,
   SendMessageParams,
-  AvatarConfig,
 } from '../types'
 
 const BASE = '/api'
@@ -29,18 +28,4 @@ export async function sendMessage(params: SendMessageParams): Promise<ChatApiRes
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json() as Promise<ChatApiResponse>
-}
-
-export async function getChatHistory(sessionId: string): Promise<unknown> {
-  const res = await fetch(`${BASE}/chat/history/${sessionId}`)
-  return res.json()
-}
-
-export async function getActiveAvatar(): Promise<AvatarConfig | null> {
-  const res = await fetch(`${BASE}/admin/avatar/list`)
-  const data = await res.json()
-  const avatars = data.avatars as AvatarConfig[] | undefined
-  return avatars?.find((a: AvatarConfig & { is_active?: boolean }) => a.is_active)
-    ?? avatars?.[0]
-    ?? null
 }

@@ -286,14 +286,6 @@ export function saveStoredLlmSettings(settings: LlmSettings) {
   );
 }
 
-export function clearStoredLlmSettings() {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  window.localStorage.removeItem(llmSettingsStorageKey);
-}
-
 export function hasUsableLlmSettings(settings: LlmSettings) {
   return Boolean(settings.apiUrl && settings.apiKey && settings.model);
 }

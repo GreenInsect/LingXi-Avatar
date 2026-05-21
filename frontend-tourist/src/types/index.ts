@@ -21,6 +21,15 @@ export interface VisitorEmotion {
   intensity: 'low' | 'medium' | 'high'
 }
 
+export interface MouthShape {
+  char: string
+  pinyin: string
+  final: string
+  category: string
+  mouthOpenY: number
+  mouthForm: number
+}
+
 export interface ChatApiResponse {
   session_id: string
   reply: string
@@ -31,6 +40,7 @@ export interface ChatApiResponse {
   knowledge_used: boolean
   intent: string
   agent_steps: string[]
+  mouth_shapes: MouthShape[]
   timestamp: string
 }
 
@@ -47,7 +57,7 @@ export interface SendMessageParams {
 
 // ── Data models ───────────────────────────────────────────────
 export type PageId =
-  | 'home' | 'spots' | 'routes'
+  | 'home' | 'spots' | 'routes' | 'map'
   | 'nianhewan' | 'info' | 'history'
 
 export type SpotCategory =
@@ -65,6 +75,7 @@ export interface Spot {
   highlights: string[]
   openTime: string
   category: SpotCategory
+  coords?: [number, number]  // [lng, lat] 高德地图坐标
 }
 
 export interface Route {

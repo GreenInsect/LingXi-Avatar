@@ -20,6 +20,7 @@ type Live2DStageProps = {
   watermarkVisible: boolean;
   transform: StageTransform;
   onTransformChange: (transform: StageTransform) => void;
+  onClick?: () => void;
 };
 
 type DragState = {
@@ -41,6 +42,7 @@ export function Live2DStage({
   watermarkVisible,
   transform,
   onTransformChange,
+  onClick,
 }: Live2DStageProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<Awaited<ReturnType<typeof createLive2DRuntime>> | null>(null);
@@ -240,6 +242,8 @@ export function Live2DStage({
   return (
     <div
       className="stage-shell"
+      style={onClick ? { cursor: 'pointer' } : undefined}
+      onClick={onClick}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -248,7 +252,6 @@ export function Live2DStage({
       onWheel={handleWheel}
     >
       <div ref={containerRef} className="stage-canvas" />
-      {/* <div className="stage-hint">Move mouse to guide gaze. Drag to move. Hold Shift and drag to scale.</div> */}
       <div className="stage-status">{status}</div>
     </div>
   );

@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, useCallback, CSSProperties } from 'react'
 import { useChat } from '../hooks/useChat'
 import { useSpeechRecognition } from '../hooks/useVoiceRecord'
-import type { AvatarEmotion, ChatMessage } from '../types'
+import { useMouthAnimation } from '../hooks/useMouthAnimation'
+import type { AvatarEmotion, ChatMessage, MouthShape } from '../types'
 import type { AvatarManifest, ExpressionLayer, ParameterOverride } from '../live2d/avatarManifest.ts'
 import {
-  createAssistantResponse, createSystemPrompt,
-} from '../lib/llm.ts';
+  getAvatarNeutralExpressionId,
+  resolveExpressionByKeyword,
+} from '../live2d/avatarManifest.ts';
 
 // ── Emotion config ────────────────────────────────────────────
 interface EmotionConfig { emoji: string; label: string; mouth: number }
@@ -116,13 +118,46 @@ function Typing() {
   )
 }
 
-// ── Main floating component ───────────────────────────────────
+// ── 情绪 → Live2D 表情回退映射（当 LLM 不可用时）─────────────
+function emotionToExpressionFallback(
+  avatar: AvatarManifest,
+  emotion: string,
+): { expressionMix: ExpressionLayer[]; parameterOverrides: ParameterOverride[] } {
+  const keywordMap: Record<string, string[]> = {
+    happy:         ['happy', 'smile', 'joy', '开心', '笑', 'cheerful', 'laugh'],
+    enthusiastic:  ['happy', 'excited', 'enthusiastic', '热情', 'excited', 'starry_eyes'],
+    curious:       ['curious', 'question', 'wonder', '好奇', '疑', 'think'],
+    gentle:        ['gentle', 'calm', 'soft', '温柔', 'peaceful', 'mellow'],
+    professional:  ['neutral', 'calm', 'serious', '专业', '认真', 'composed'],
+    surprised:     ['surprised', 'shock', 'amaze', '惊喜', '惊', 'stun', 'dizzy'],
+  };
+
+  const keywords = keywordMap[emotion] || [emotion];
+  const neutralId = getAvatarNeutralExpressionId(avatar);
+
+  // 在角色表情目录中按关键词匹配
+  for (const keyword of keywords) {
+    const expr = avatar.expressions.find(e =>
+      e.id !== 'neutral' && e.kind === 'emotion' && (
+        e.id.toLowerCase().includes(keyword.toLowerCase()) ||
+        (e.label && e.label.includes(keyword)) ||
+        e.aliases?.some(a => a.toLowerCase().includes(keyword.toLowerCase()))
+      )
+    );
+    if (expr) {
+      return { expressionMix: [{ key: expr.id, weight: 1 }], parameterOverrides: [] };
+    }
+  }
+
+  // 没有任何匹配 → 回到中性表情
+  return { expressionMix: [{ key: neutralId, weight: 1 }], parameterOverrides: [] };
+}
 interface FloatingAvatarProps {
   open: boolean; onToggle: () => void;
   selectedAvatar: AvatarManifest;
   onAvatarUpdate: (data: {
-    expressionMix: any[],
-    parameterOverrides: any[]
+    expressionMix: ExpressionLayer[],
+    parameterOverrides: ParameterOverride[]
   }) => void;
 }
 
@@ -145,10 +180,17 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
   const [speaking, setSpeaking] = useState(false)
   const [text, setText] = useState('')
   const [showQuick, setShowQuick] = useState(true)
+  const [voiceError, setVoiceError] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const { messages, loading, send, addMessage } = useChat({ sessionId, setSessionId })
+  const { start: startMouth, stop: stopMouth } = useMouthAnimation();
+
+  // 保持当前表情引用，嘴型动画回调中使用
+  const currentExpressionRef = useRef<{ expressionMix: ExpressionLayer[] }>({
+    expressionMix: [{ key: getAvatarNeutralExpressionId(selectedAvatar), weight: 1 }],
+  });
 
   useEffect(() => {
     if (open && messages.length === 0) {
@@ -180,94 +222,67 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
       const res = await send({ text: msg, inputType, location: '灵山胜境景区内' })
       const data = res as LingshanResponse | undefined;
       if (data?.avatar_emotion) setEmotion(data.avatar_emotion)
-      // console.log('Avatar update data:', res);
-      if (!data) {
-        console.error("后端未返回有效数据");
-        return;
+      if (!data) return;
+      // 从 useChat 返回的 emotions 直接驱动 Live2D 表情
+      const resData = res as (LingshanResponse & { emotions: string[]; mouth_shapes: MouthShape[] }) | undefined;
+      const emotions = resData?.emotions || [];
+
+      let expressionMix: ExpressionLayer[];
+      if (emotions.length > 0) {
+        const expressionId = resolveExpressionByKeyword(selectedAvatar, emotions[0]);
+        if (expressionId) {
+          expressionMix = [{ key: expressionId, weight: 1 }];
+        } else {
+          expressionMix = emotionToExpressionFallback(selectedAvatar, data.avatar_emotion || 'happy').expressionMix;
+        }
+      } else {
+        expressionMix = emotionToExpressionFallback(selectedAvatar, data.avatar_emotion || 'happy').expressionMix;
       }
-      const avatarControl = await createAssistantResponse({
-        avatar: selectedAvatar,
-        history: [{ id: crypto.randomUUID(), role: 'assistant', content: data.reply }],
-        systemPrompt: createSystemPrompt(selectedAvatar),
-      });
-      console.log('Avatar control data: avatarControl == ', avatarControl);
-      onAvatarUpdate({
-        expressionMix: avatarControl.expressionMix,
-        parameterOverrides: avatarControl.parameterOverrides
-      });
-    } catch { /* silent */ }
-  }, [text, loading, send])
+      currentExpressionRef.current = { expressionMix };
 
-  // ── 改进后的 handleSend ───────────────────────────────────────────
-  // const handleSend = useCallback(async (customText?: string, inputType: 'text' | 'voice' = 'text') => {
-  //   const msg = (customText ?? text).trim();
+      // 立即推送表情到 Live2D
+      onAvatarUpdate({ expressionMix, parameterOverrides: [] });
 
-  //   // 1. 基础拦截
-  //   if (!msg || loading) return;
+      // 嘴型动画：优先用浏览器 audio 真实时长，否则用帧数/30fps 估算
+      const mouthShapes = resData?.mouth_shapes || [];
+      const audioEl = (res as any)?.audioEl as HTMLAudioElement | undefined;
+      const realDur = (audioEl?.duration && !isNaN(audioEl.duration) && audioEl.duration > 0)
+        ? audioEl.duration
+        : (mouthShapes.length > 0 ? mouthShapes.length / 30 : 0);
 
-  //   // 2. 清理状态 & UI 反馈
-  //   setText('');
-  //   if (textareaRef.current) textareaRef.current.style.height = 'auto';
-  //   setShowQuick(false);
-  //   setSpeaking(true);
+      if (mouthShapes.length > 0 && realDur > 0) {
+        stopMouth();
+        startMouth(mouthShapes, realDur, (mouthParams) => {
+          onAvatarUpdate({
+            expressionMix: currentExpressionRef.current.expressionMix,
+            parameterOverrides: [
+              { id: 'ParamMouthOpenY', value: mouthParams.mouthOpenY },
+              { id: 'ParamMouthForm', value: mouthParams.mouthForm },
+            ],
+          });
+        });
+      }
 
-  //   // 在此处可以先设置一个“思考”表情（可选）
-  //   // setEmotion('curious'); 
-
-  //   try {
-  //     // 3. 调用 useChat 钩子中的 send 方法
-  //     // 假设 res 的结构符合：{ reply: string, expressionMix: [], parameterOverrides: [], avatar_emotion?: string }
-  //     const response = await send({
-  //       text: msg,
-  //       inputType,
-  //       location: '灵山胜境景区内'
-  //     });
-
-  //     // 4. 驱动数字人表情与参数 (同步 handleSubmit 的逻辑)
-  //     if (response) {
-  //       // 如果后端返回了具体的表情标识符 (happy, curious 等)
-  //       if (response.avatar_emotion) {
-  //         setEmotion(response.avatar_emotion as AvatarEmotion);
-  //       }
-
-  //       // 如果你的 Live2D 引擎需要 ExpressionMix 和 ParameterOverrides
-  //       // 注意：这里需要确保父组件或全局状态能接收这些值
-  //       // 假设这些 set 函数是通过 Props 传进来或在外部定义的
-  //       // setActiveExpressionMix(response.expressionMix);
-  //       // setActiveParameterOverrides(response.parameterOverrides);
-  //     }
-
-  //   } catch (error: any) {
-  //     // 5. 错误分类处理 (同步 handleSubmit 的逻辑)
-  //     console.error("AI 响应失败:", error);
-
-  //     let errorContent = '网络连接好像开小差了，请稍后再试。';
-  //     let errorMeta = 'connection failed';
-
-  //     // 恢复中性表情
-  //     setEmotion('gentle');
-
-  //     // 根据不同错误类型定制提示 (假设 error 包含 status 或特定类型)
-  //     if (error.name === 'LlmConfigurationError' || error.status === 401) {
-  //       errorContent = '导游小慧的秘钥配置似乎有问题，请检查后台设置。';
-  //       errorMeta = 'settings required';
-  //     } else if (error.status === 404) {
-  //       errorContent = '找不到 AI 服务地址，请检查接口配置。';
-  //     }
-
-  //     // 将错误消息添加到聊天记录中 (手动调用 addMessage)
-  //     addMessage('assistant', errorContent, { meta: errorMeta, emotion: 'gentle' });
-
-  //   } finally {
-  //     // 无论成败，最后结束说话动画和加载状态
-  //     // loading 状态由 useChat 钩子内部维护
-  //     setTimeout(() => setSpeaking(false), 2000); // 延迟一点点关闭，更自然
-  //   }
-  // }, [text, loading, send, addMessage]);
+      // 音频播放结束时强制闭嘴（最终权威）
+      if (audioEl) {
+        const closeMouth = () => {
+          stopMouth();
+          onAvatarUpdate({
+            expressionMix: currentExpressionRef.current.expressionMix,
+            parameterOverrides: [
+              { id: 'ParamMouthOpenY', value: 0.04 },
+              { id: 'ParamMouthForm', value: 0 },
+            ],
+          });
+        };
+        audioEl.addEventListener('ended', closeMouth, { once: true });
+      }
+    } catch { /* send failed, already handled in useChat */ }
+  }, [text, loading, send, selectedAvatar])
 
   const { listening, supported, start, stop } = useSpeechRecognition({
     onResult: (t) => { setText(t); setTimeout(() => handleSend(t, 'voice'), 150) },
-    onError: () => { },
+    onError: (msg) => { setVoiceError(msg); setTimeout(() => setVoiceError(''), 3000) },
   })
 
   const btnStyle: CSSProperties = {
@@ -276,42 +291,8 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
     transition: 'all 0.2s', cursor: 'pointer',
   }
 
-  // ── Collapsed bubble ──────────────────────────────────────────
-  if (!open) {
-    return (
-      <div style={{ position: 'fixed', right: 28, bottom: 28, zIndex: 500, cursor: 'pointer' }} onClick={onToggle}>
-        {[1, 2].map(i => (
-          <div key={i} style={{
-            position: 'absolute', inset: -8 * i, borderRadius: '50%',
-            border: '1px solid rgba(201,168,76,0.3)',
-            animation: `ripple 2.4s ease-out ${i * 0.6}s infinite`, pointerEvents: 'none',
-          }} />
-        ))}
-        <div style={{
-          width: 64, height: 64, borderRadius: '50%',
-          background: 'linear-gradient(135deg, var(--gold), #a07830)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 6px 28px rgba(201,168,76,0.45), 0 2px 8px rgba(0,0,0,0.15)',
-          fontSize: 30, animation: 'float 3.5s ease-in-out infinite', position: 'relative',
-          transition: 'transform 0.2s',
-        }}
-          onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.transform = 'scale(1.08)'}
-          onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.transform = 'scale(1)'}
-        >
-          🤖
-          <div style={{
-            position: 'absolute', right: 'calc(100% + 12px)', top: '50%', transform: 'translateY(-50%)',
-            background: 'rgba(26,15,10,0.85)', color: 'white',
-            padding: '6px 12px', borderRadius: 20, fontSize: 12, whiteSpace: 'nowrap',
-            pointerEvents: 'none', backdropFilter: 'blur(8px)',
-          }}>
-            AI导游小慧
-            <div style={{ position: 'absolute', right: -5, top: '50%', transform: 'translateY(-50%)', width: 0, height: 0, borderTop: '5px solid transparent', borderBottom: '5px solid transparent', borderLeft: '5px solid rgba(26,15,10,0.85)' }} />
-          </div>
-        </div>
-      </div>
-    )
-  }
+  // ── 收起时什么都不渲染（由 Live2D 数字人点击打开）───────────
+  if (!open) return null;
 
   // ── Expanded panel ────────────────────────────────────────────
   return (
@@ -394,6 +375,15 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
             >{q}</button>
           ))}
         </div>
+      )}
+
+      {/* Voice error */}
+      {voiceError && (
+        <div style={{
+          padding: '6px 14px', fontSize: 11, color: 'var(--red)',
+          background: 'rgba(181,52,30,0.06)', textAlign: 'center',
+          animation: 'fadeIn 0.2s ease',
+        }}>{voiceError}</div>
       )}
 
       {/* Input */}

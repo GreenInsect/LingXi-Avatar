@@ -1,0 +1,2 @@
+backend/app/ml/training_data/
+*.onnx.data
