@@ -6,14 +6,19 @@
 """
 from __future__ import annotations
 
-import uuid
-from typing import Optional
+import asyncio
+import time
+from typing import Awaitable, Callable, Optional
 
 from langchain_core.messages import HumanMessage
 
+from app.core.config import settings
+from app.core.logging import brief_text, elapsed_ms, get_logger
 from app.agent.graph import get_agent_graph
 from app.agent.state import AgentState
 from app.agent.nodes import fallback_handler
+
+logger = get_logger(__name__)
 
 
 async def run_agent(
@@ -25,6 +30,7 @@ async def run_agent(
     location: Optional[str] = None,
     interests: Optional[str] = None,
     avatar_config: Optional[dict] = None,
+    stream_callback: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> dict:
     """
     运行 LangGraph 导游智能体
@@ -49,6 +55,17 @@ async def run_agent(
             "agent_steps": list,    # 调试步骤记录
         }
     """
+    start = time.perf_counter()
+    logger.info(
+        "agent start session_id=%s input_chars=%s history_count=%s has_image=%s location=%s interests=%s",
+        session_id,
+        len(user_input or ""),
+        len(history or []),
+        bool(image_base64),
+        brief_text(location, 60),
+        brief_text(interests, 80),
+    )
+
     # 将历史转换为 LangChain Message 格式 
     lc_messages = []
     for h in history[-10:]:  # 最多保留10条
@@ -78,16 +95,50 @@ async def run_agent(
         "location":        location or "灵山胜境景区内",
         "interests":       interests or "未指定",
         "avatar_config":   avatar_config,
+        "stream_callback": stream_callback,
         "agent_steps":     [],
     }
+
+    logger.info(
+        "agent state built session_id=%s lc_messages=%s avatar_config=%s",
+        session_id,
+        len(lc_messages),
+        bool(avatar_config),
+    )
 
     # 执行 LangGraph ───
     try:
         graph = get_agent_graph()
-        final_state: AgentState = await graph.ainvoke(initial_state)
+        final_state: AgentState = await asyncio.wait_for(
+            graph.ainvoke(initial_state),
+            timeout=settings.CHAT_AGENT_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.exception(
+            "agent timeout session_id=%s timeout_seconds=%s duration_ms=%s",
+            session_id,
+            settings.CHAT_AGENT_TIMEOUT_SECONDS,
+            elapsed_ms(start),
+        )
+        fallback_state = await fallback_handler(initial_state)
+        return {
+            "reply":           fallback_state["final_reply"],
+            "avatar_emotion":  fallback_state["avatar_emotion"],
+            "visitor_emotion": {"emotion": "neutral", "sentiment_score": 0.5, "intensity": "low"},
+            "knowledge_used":  False,
+            "intent":          "qa",
+            "agent_steps":     fallback_state["agent_steps"] + [
+                f"[智能体超时] 超过 {settings.CHAT_AGENT_TIMEOUT_SECONDS:.0f}s，已返回兜底回复"
+            ],
+        }
     except Exception as e:
         # vLLM 不可用时降级到兜底处理
-        print(f"❌ 智能体图执行失败: {e}")
+        logger.exception(
+            "agent failed session_id=%s duration_ms=%s error=%s",
+            session_id,
+            elapsed_ms(start),
+            e,
+        )
         fallback_state = await fallback_handler(initial_state)
         return {
             "reply":           fallback_state["final_reply"],
@@ -99,7 +150,8 @@ async def run_agent(
         }
 
     # 提取结果 
-    return {
+    reply = final_state.get("final_reply", "抱歉，我暂时无法回答，请稍后再试。")
+    result = {
         "reply":           final_state.get("final_reply", "抱歉，我暂时无法回答，请稍后再试。"),
         "avatar_emotion":  final_state.get("avatar_emotion", "gentle"),
         "visitor_emotion": final_state.get("visitor_emotion", {}),
@@ -107,6 +159,16 @@ async def run_agent(
         "intent":          final_state.get("intent", "qa"),
         "agent_steps":     final_state.get("agent_steps", []),
     }
+    logger.info(
+        "agent done session_id=%s intent=%s reply_chars=%s knowledge_used=%s steps=%s duration_ms=%s",
+        session_id,
+        result["intent"],
+        len(reply or ""),
+        result["knowledge_used"],
+        len(result["agent_steps"]),
+        elapsed_ms(start),
+    )
+    return result
 
 
 async def analyze_conversations_report(conversations: list[dict]) -> dict:

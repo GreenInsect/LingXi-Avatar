@@ -4,21 +4,33 @@
 """
 
 from contextlib import asynccontextmanager
+import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
 
 from app.api import chat, admin, analytics, tts, knowledge
 from app.core.config import settings
+from app.core.logging import (
+    elapsed_ms,
+    get_logger,
+    new_request_id,
+    reset_request_id,
+    set_request_id,
+    setup_logging,
+)
 from app.agent.rag_service import rag_service
 # os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+setup_logging(settings.LOG_LEVEL)
+logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时初始化 RAG，关闭时清理"""
-    print("🚀 初始化灵山胜境 AI 导游系统（vLLM 推理后端）...")
+    logger.info("初始化灵山胜境 AI 导游系统（vLLM 推理后端）")
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     os.makedirs(settings.CHROMA_DB_DIR, exist_ok=True)
     os.makedirs(settings.KNOWLEDGE_BASE_DIR, exist_ok=True)
@@ -26,9 +38,15 @@ async def lifespan(app: FastAPI):
     # 初始化 RAG 知识库（连接 vLLM Embedding 服务）
     # rag_service.initialize()
 
-    print("✅ 系统启动完成")
+    logger.info(
+        "系统启动完成 chat_model=%s vl_model=%s embed_model=%s rag_initialize_on_chat=%s",
+        settings.QWEN_MODEL,
+        settings.QWEN_VL_MODEL,
+        settings.EMBEDDING_MODEL,
+        settings.RAG_INITIALIZE_ON_CHAT,
+    )
     yield
-    print("🛑 系统关闭")
+    logger.info("系统关闭")
 
 
 app = FastAPI(
@@ -45,6 +63,49 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = (
+        request.headers.get("x-request-id")
+        or request.headers.get("x-correlation-id")
+        or new_request_id()
+    )
+    token = set_request_id(request_id)
+    start = time.perf_counter()
+    client = request.client.host if request.client else "-"
+
+    logger.info(
+        "http request start method=%s path=%s client=%s",
+        request.method,
+        request.url.path,
+        client,
+    )
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "http request failed method=%s path=%s client=%s duration_ms=%s",
+            request.method,
+            request.url.path,
+            client,
+            elapsed_ms(start),
+        )
+        reset_request_id(token)
+        raise
+
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        "http request done method=%s path=%s status=%s duration_ms=%s",
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms(start),
+    )
+    reset_request_id(token)
+    return response
+
 
 os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
@@ -81,4 +142,4 @@ async def health():
         "rag": rag_service._initialized,
         "vllm": vllm_status,
     }
-# uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload
+# uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload --reload-include '*.py' --reload-exclude 'ai_guide.db*' --reload-exclude 'chroma_db/*' --reload-exclude 'uploads/*'

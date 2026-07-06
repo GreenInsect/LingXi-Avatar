@@ -10,15 +10,15 @@ import {
 } from '../live2d/avatarManifest.ts';
 
 // ── Emotion config ────────────────────────────────────────────
-interface EmotionConfig { emoji: string; label: string; mouth: number }
+interface EmotionConfig { emoji: string; label: string }
 
 const EMOTIONS: Record<AvatarEmotion, EmotionConfig> = {
-  happy: { emoji: '😊', label: '开心', mouth: 8 },
-  enthusiastic: { emoji: '😄', label: '热情', mouth: 11 },
-  curious: { emoji: '🤔', label: '好奇', mouth: 2 },
-  gentle: { emoji: '😌', label: '温柔', mouth: 6 },
-  professional: { emoji: '😎', label: '专业', mouth: 4 },
-  surprised: { emoji: '😲', label: '惊喜', mouth: 9 },
+  happy: { emoji: '😊', label: '开心' },
+  enthusiastic: { emoji: '😄', label: '热情' },
+  curious: { emoji: '🤔', label: '好奇' },
+  gentle: { emoji: '😌', label: '温柔' },
+  professional: { emoji: '😎', label: '专业' },
+  surprised: { emoji: '😲', label: '惊喜' },
 }
 
 const QUICK_QUESTIONS = [
@@ -26,78 +26,53 @@ const QUICK_QUESTIONS = [
   '九龙灌浴几点表演？', '祥符禅寺历史介绍', '灵山梵宫怎么参观？',
 ]
 
-// ── SVG Avatar Face ───────────────────────────────────────────
-interface AvatarFaceProps { emotion?: AvatarEmotion; size?: number }
+function getMessageDisplayContent(msg: ChatMessage, guideName: string) {
+  if (msg.role !== 'assistant' || !msg.content.includes('很高兴为您服务！')) {
+    return msg.content
+  }
 
-function AvatarFace({ emotion = 'happy', size = 52 }: AvatarFaceProps) {
-  const cfg = EMOTIONS[emotion] ?? EMOTIONS.happy
-  const cy = 96
-  const ctrl = cfg.mouth
-  return (
-    <svg width={size} height={size} viewBox="0 0 160 160" style={{ display: 'block' }}>
-      <defs>
-        <radialGradient id="sg2" cx="40%" cy="35%">
-          <stop offset="0%" stopColor="#f7d0a8" />
-          <stop offset="100%" stopColor="#e8a878" />
-        </radialGradient>
-        <linearGradient id="bg2" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#4a8c6e" />
-          <stop offset="100%" stopColor="#2d6b52" />
-        </linearGradient>
-      </defs>
-      <ellipse cx="80" cy="135" rx="38" ry="34" fill="url(#bg2)" />
-      <path d="M55,110 Q80,102 105,110 L108,122 Q80,116 52,122 Z" fill="#c8a96e" opacity="0.6" />
-      <rect x="73" y="105" width="14" height="10" rx="5" fill="url(#sg2)" />
-      <ellipse cx="80" cy="68" rx="34" ry="36" fill="url(#sg2)" />
-      <path d="M46,68 Q48,36 80,32 Q112,36 114,68 Q108,50 80,48 Q52,50 46,68 Z" fill="#1a0f06" />
-      <ellipse cx="80" cy="34" rx="11" ry="7" fill="#1a0f06" />
-      <circle cx="80" cy="27" r="4.5" fill="#c8a96e" />
-      <ellipse cx="64" cy="64" rx="8" ry="6" fill="white" />
-      <ellipse cx="96" cy="64" rx="8" ry="6" fill="white" />
-      <ellipse cx="65" cy="65" rx="4.5" ry="4.5" fill="#2c1a0a" />
-      <ellipse cx="97" cy="65" rx="4.5" ry="4.5" fill="#2c1a0a" />
-      <circle cx="66.5" cy="64" r="1.5" fill="white" />
-      <circle cx="98.5" cy="64" r="1.5" fill="white" />
-      <path d="M55,56 Q62,52 68,54" stroke="#3d2010" strokeWidth="1.8" strokeLinecap="round" fill="none" />
-      <path d="M92,54 Q98,52 105,56" stroke="#3d2010" strokeWidth="1.8" strokeLinecap="round" fill="none" />
-      <path d="M77,76 Q80,80 83,76" stroke="#c0927a" strokeWidth="1.2" fill="none" strokeLinecap="round" />
-      <path d={`M64,${cy} Q80,${cy + ctrl} 96,${cy}`} stroke="#c0392b" strokeWidth="2" fill="none" strokeLinecap="round" />
-      <ellipse cx="52" cy="73" rx="8" ry="4" fill="rgba(255,120,100,0.13)" />
-      <ellipse cx="108" cy="73" rx="8" ry="4" fill="rgba(255,120,100,0.13)" />
-    </svg>
-  )
+  return msg.content
+    .replace(/^您好！我是灵山胜境数字导游\s*[^。\n]+。/, `您好！我是灵山胜境数字导游 ${guideName}。`)
+    .replace(/^您好！我是灵山胜境AI导游小慧\s*🌸?/, `您好！我是灵山胜境数字导游 ${guideName}。`)
 }
 
 // ── Message Bubble ────────────────────────────────────────────
-function Bubble({ msg }: { msg: ChatMessage }) {
+function Bubble({ msg, guideName }: { msg: ChatMessage; guideName: string }) {
   const isUser = msg.role === 'user'
+  const content = getMessageDisplayContent(msg, guideName)
+  if (!isUser && !content) return null
+
   const time = new Date(msg.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
   return (
-    <div style={{ display: 'flex', flexDirection: isUser ? 'row-reverse' : 'row', gap: 6, animation: 'fadeUp 0.3s ease' }}>
-      <div style={{
-        width: 26, height: 26, borderRadius: '50%', flexShrink: 0,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12,
-        background: isUser
-          ? 'linear-gradient(135deg,var(--gold),var(--gold-light))'
-          : 'linear-gradient(135deg,var(--jade),var(--jade2))',
-      }}>
-        {isUser ? '👤' : '🌸'}
-      </div>
-      <div style={{ maxWidth: '80%' }}>
+    <div style={{
+      display: 'flex',
+      justifyContent: isUser ? 'flex-end' : 'flex-start',
+      animation: 'fadeUp 0.24s ease',
+    }}>
+      <div style={{ maxWidth: '84%', display: 'grid', gap: 4 }}>
         <div style={{
-          padding: '8px 12px', fontSize: 13, lineHeight: 1.65,
+          padding: '10px 13px',
+          fontSize: 13,
+          lineHeight: 1.65,
           whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          borderRadius: isUser ? '14px 4px 14px 14px' : '4px 14px 14px 14px',
+          borderRadius: isUser ? '15px 15px 5px 15px' : '15px 15px 15px 5px',
           background: isUser
-            ? 'linear-gradient(135deg,rgba(61,122,94,0.82),rgba(61,122,94,0.65))'
-            : 'rgba(255,252,245,0.95)',
+            ? 'linear-gradient(135deg, rgba(61,122,94,0.95), rgba(76,143,113,0.86))'
+            : 'linear-gradient(180deg, rgba(255,252,245,0.98), rgba(248,240,225,0.96))',
           color: isUser ? 'white' : 'var(--ink)',
-          border: isUser ? 'none' : '1px solid rgba(201,168,76,0.2)',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+          border: isUser ? '1px solid rgba(61,122,94,0.18)' : '1px solid rgba(201,168,76,0.24)',
+          boxShadow: isUser
+            ? '0 8px 18px rgba(61,122,94,0.18)'
+            : '0 8px 20px rgba(91,67,37,0.08)',
         }}>
-          {msg.content}
+          {content}
         </div>
-        <div style={{ fontSize: 9, color: 'rgba(26,15,10,0.35)', marginTop: 3, textAlign: isUser ? 'right' : 'left', padding: '0 4px' }}>
+        <div style={{
+          fontSize: 10,
+          color: 'rgba(26,15,10,0.38)',
+          textAlign: isUser ? 'right' : 'left',
+          padding: '0 3px',
+        }}>
           {time}
         </div>
       </div>
@@ -107,9 +82,16 @@ function Bubble({ msg }: { msg: ChatMessage }) {
 
 function Typing() {
   return (
-    <div style={{ display: 'flex', gap: 6, animation: 'fadeIn 0.2s ease' }}>
-      <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'linear-gradient(135deg,var(--jade),var(--jade2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12 }}>🌸</div>
-      <div style={{ padding: '10px 14px', borderRadius: '4px 14px 14px 14px', background: 'rgba(255,252,245,0.95)', border: '1px solid rgba(201,168,76,0.2)', display: 'flex', gap: 4 }}>
+    <div style={{ display: 'flex', justifyContent: 'flex-start', animation: 'fadeIn 0.2s ease' }}>
+      <div style={{
+        padding: '11px 14px',
+        borderRadius: '15px 15px 15px 5px',
+        background: 'rgba(255,252,245,0.96)',
+        border: '1px solid rgba(201,168,76,0.22)',
+        display: 'flex',
+        gap: 5,
+        boxShadow: '0 8px 20px rgba(91,67,37,0.07)',
+      }}>
         {[0, 0.15, 0.3].map((d, i) => (
           <div key={i} style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--jade)', animation: 'pulse 1.1s ease infinite', animationDelay: `${d}s` }} />
         ))}
@@ -155,6 +137,9 @@ function emotionToExpressionFallback(
 interface FloatingAvatarProps {
   open: boolean; onToggle: () => void;
   selectedAvatar: AvatarManifest;
+  selectedAvatarId: string;
+  avatarOptions: AvatarManifest[];
+  onAvatarChange: (avatarId: string) => void;
   onAvatarUpdate: (data: {
     expressionMix: ExpressionLayer[],
     parameterOverrides: ParameterOverride[]
@@ -174,7 +159,15 @@ interface LingshanResponse {
   visitor_emotion: { emotion: string, sentiment_score: number, intensity: string };
 }
 
-export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selectedAvatar }: FloatingAvatarProps) {
+export default function FloatingAvatar({
+  open,
+  onToggle,
+  onAvatarUpdate,
+  selectedAvatar,
+  selectedAvatarId,
+  avatarOptions,
+  onAvatarChange,
+}: FloatingAvatarProps) {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [emotion, setEmotion] = useState<AvatarEmotion>('happy')
   const [speaking, setSpeaking] = useState(false)
@@ -183,9 +176,11 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
   const [voiceError, setVoiceError] = useState('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const playbackTimerRef = useRef<number | null>(null)
 
   const { messages, loading, send, addMessage } = useChat({ sessionId, setSessionId })
   const { start: startMouth, stop: stopMouth } = useMouthAnimation();
+  const guideName = selectedAvatar.name?.trim() || selectedAvatar.id
 
   // 保持当前表情引用，嘴型动画回调中使用
   const currentExpressionRef = useRef<{ expressionMix: ExpressionLayer[] }>({
@@ -194,22 +189,39 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
 
   useEffect(() => {
     if (open && messages.length === 0) {
-      setTimeout(() => {
-        addMessage('assistant', '您好！我是灵山胜境AI导游小慧 🌸\n\n很高兴为您服务！我可以为您介绍景区历史、推荐游览路线、解答门票咨询等。请问有什么需要帮助的吗？', { emotion: 'happy' })
+      const timer = window.setTimeout(() => {
+        addMessage('assistant', `您好！我是灵山胜境数字导游 ${guideName}。\n\n很高兴为您服务！我可以介绍景区历史、推荐游览路线、解答门票咨询等。请问有什么需要帮助的吗？`, { emotion: 'happy' })
       }, 400)
+      return () => window.clearTimeout(timer)
     }
-  }, [open]) // eslint-disable-line
+    return undefined
+  }, [open, messages.length, addMessage, guideName])
+
+  useEffect(() => {
+    currentExpressionRef.current = {
+      expressionMix: [{ key: getAvatarNeutralExpressionId(selectedAvatar), weight: 1 }],
+    }
+    setEmotion('happy')
+    stopMouth()
+  }, [selectedAvatar, stopMouth])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
 
-  useEffect(() => {
-    if (!loading) {
-      const t = setTimeout(() => setSpeaking(false), 1500)
-      return () => clearTimeout(t)
+  const clearPlaybackTimer = useCallback(() => {
+    if (playbackTimerRef.current !== null) {
+      window.clearTimeout(playbackTimerRef.current)
+      playbackTimerRef.current = null
     }
-  }, [loading])
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      clearPlaybackTimer()
+      stopMouth()
+    }
+  }, [clearPlaybackTimer, stopMouth])
 
   const handleSend = useCallback(async (customText?: string, inputType: 'text' | 'voice' = 'text') => {
     const msg = (customText ?? text).trim()
@@ -218,11 +230,15 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
     if (textareaRef.current) textareaRef.current.style.height = 'auto'
     setShowQuick(false)
     setSpeaking(true)
+    clearPlaybackTimer()
     try {
       const res = await send({ text: msg, inputType, location: '灵山胜境景区内' })
       const data = res as LingshanResponse | undefined;
       if (data?.avatar_emotion) setEmotion(data.avatar_emotion)
-      if (!data) return;
+      if (!data) {
+        setSpeaking(false)
+        return;
+      }
       // 从 useChat 返回的 emotions 直接驱动 Live2D 表情
       const resData = res as (LingshanResponse & { emotions: string[]; mouth_shapes: MouthShape[] }) | undefined;
       const emotions = resData?.emotions || [];
@@ -246,9 +262,24 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
       // 嘴型动画：优先用浏览器 audio 真实时长，否则用帧数/30fps 估算
       const mouthShapes = resData?.mouth_shapes || [];
       const audioEl = (res as any)?.audioEl as HTMLAudioElement | undefined;
-      const realDur = (audioEl?.duration && !isNaN(audioEl.duration) && audioEl.duration > 0)
+      const browserAudioDur = (audioEl?.duration && !isNaN(audioEl.duration) && audioEl.duration > 0)
         ? audioEl.duration
-        : (mouthShapes.length > 0 ? mouthShapes.length / 30 : 0);
+        : 0;
+      const apiAudioDur = Number(data.audio_duration ?? 0);
+      const mouthFrameDur = mouthShapes.length > 0 ? mouthShapes.length / 30 : 0;
+      const realDur = browserAudioDur > 0
+        ? browserAudioDur
+        : (apiAudioDur > 0 ? apiAudioDur : mouthFrameDur);
+
+      console.info('[avatar] playback sync start', {
+        sessionId: data.session_id,
+        hasAudio: Boolean(audioEl),
+        browserAudioDur,
+        apiAudioDur,
+        mouthShapes: mouthShapes.length,
+        mouthFrameDur: Number(mouthFrameDur.toFixed(2)),
+        syncDuration: Number(realDur.toFixed(2)),
+      });
 
       if (mouthShapes.length > 0 && realDur > 0) {
         stopMouth();
@@ -263,22 +294,42 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
         });
       }
 
-      // 音频播放结束时强制闭嘴（最终权威）
+      let playbackClosed = false;
+      const closeMouthAndStopSpeaking = () => {
+        if (playbackClosed) return;
+        playbackClosed = true;
+        clearPlaybackTimer();
+        stopMouth();
+        setSpeaking(false);
+        onAvatarUpdate({
+          expressionMix: currentExpressionRef.current.expressionMix,
+          parameterOverrides: [
+            { id: 'ParamMouthOpenY', value: 0.04 },
+            { id: 'ParamMouthForm', value: 0 },
+          ],
+        });
+        console.info('[avatar] playback sync done', {
+          sessionId: data.session_id,
+          endedBy: audioEl ? 'audio-ended-or-timeout' : 'timer',
+        });
+      };
+
       if (audioEl) {
-        const closeMouth = () => {
-          stopMouth();
-          onAvatarUpdate({
-            expressionMix: currentExpressionRef.current.expressionMix,
-            parameterOverrides: [
-              { id: 'ParamMouthOpenY', value: 0.04 },
-              { id: 'ParamMouthForm', value: 0 },
-            ],
-          });
-        };
-        audioEl.addEventListener('ended', closeMouth, { once: true });
+        audioEl.addEventListener('ended', closeMouthAndStopSpeaking, { once: true });
       }
-    } catch { /* send failed, already handled in useChat */ }
-  }, [text, loading, send, selectedAvatar])
+      if (realDur > 0) {
+        playbackTimerRef.current = window.setTimeout(
+          closeMouthAndStopSpeaking,
+          Math.ceil((realDur + 0.5) * 1000),
+        );
+      } else if (!audioEl) {
+        playbackTimerRef.current = window.setTimeout(closeMouthAndStopSpeaking, 1500);
+      }
+    } catch {
+      setSpeaking(false)
+      /* send failed, already handled in useChat */
+    }
+  }, [text, loading, send, selectedAvatar, onAvatarUpdate, startMouth, stopMouth, clearPlaybackTimer])
 
   const { listening, supported, start, stop } = useSpeechRecognition({
     onResult: (t) => { setText(t); setTimeout(() => handleSend(t, 'voice'), 150) },
@@ -298,56 +349,118 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
   return (
     <div style={{
       position: 'fixed', right: 20, bottom: 20,
-      width: 360, height: 580, zIndex: 500,
+      width: 'min(390px, calc(100vw - 32px))',
+      height: 'min(640px, calc(100vh - 40px))',
+      zIndex: 500,
       display: 'flex', flexDirection: 'column',
-      background: 'rgba(250,245,236,0.97)', backdropFilter: 'blur(20px)',
-      borderRadius: 20,
-      boxShadow: '0 20px 60px rgba(26,15,10,0.18), 0 4px 16px rgba(26,15,10,0.1)',
-      border: '1px solid var(--border)', overflow: 'hidden',
+      background: 'linear-gradient(180deg, rgba(255,252,245,0.98), rgba(247,238,222,0.97))',
+      backdropFilter: 'blur(22px)',
+      borderRadius: 18,
+      boxShadow: '0 24px 70px rgba(26,15,10,0.22), 0 8px 24px rgba(61,122,94,0.10)',
+      border: '1px solid rgba(201,168,76,0.28)',
+      overflow: 'hidden',
       animation: 'bubblePop 0.32s cubic-bezier(0.34,1.56,0.64,1)',
       transformOrigin: 'bottom right',
     }}>
       {/* Header */}
       <div style={{
-        padding: '12px 16px', flexShrink: 0,
-        background: 'linear-gradient(135deg, rgba(201,168,76,0.12), rgba(61,122,94,0.08))',
-        borderBottom: '1px solid var(--border)',
-        display: 'flex', alignItems: 'center', gap: 10,
+        padding: '14px 15px 12px',
+        flexShrink: 0,
+        background: 'linear-gradient(135deg, rgba(61,122,94,0.13), rgba(201,168,76,0.13))',
+        borderBottom: '1px solid rgba(201,168,76,0.22)',
+        display: 'grid',
+        gap: 10,
       }}>
-        <div style={{ position: 'relative', flexShrink: 0 }}>
-          <div style={{
-            width: 44, height: 44, borderRadius: '50%', overflow: 'hidden',
-            border: '2px solid rgba(201,168,76,0.35)', background: 'var(--warm)',
-            animation: speaking ? 'none' : 'float 4s ease-in-out infinite',
-          }}>
-            <AvatarFace emotion={emotion} size={44} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 10, color: 'rgba(26,15,10,0.52)', letterSpacing: 0.8, fontWeight: 700 }}>
+              灵山胜境数字导游
+            </div>
+            <div style={{
+              marginTop: 2,
+              fontSize: 20,
+              fontWeight: 800,
+              color: 'var(--ink)',
+              lineHeight: 1.1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              {guideName}
+            </div>
           </div>
-          {speaking && (
-            <div style={{ position: 'absolute', bottom: -2, right: -2, width: 12, height: 12, borderRadius: '50%', background: 'var(--jade)', border: '2px solid white', animation: 'pulse 0.8s ease infinite' }} />
-          )}
+          <select
+            value={selectedAvatarId}
+            onChange={event => onAvatarChange(event.target.value)}
+            aria-label="选择数字人"
+            title="选择数字人"
+            style={{
+              width: 122,
+              height: 34,
+              borderRadius: 10,
+              border: '1px solid rgba(61,122,94,0.22)',
+              background: 'rgba(255,252,245,0.86)',
+              color: 'var(--ink)',
+              outline: 'none',
+              padding: '0 10px',
+              fontSize: 12,
+              fontWeight: 700,
+              boxShadow: '0 4px 14px rgba(26,15,10,0.06)',
+            }}
+          >
+            {avatarOptions.map(avatar => (
+              <option key={avatar.id} value={avatar.id}>{avatar.name || avatar.id}</option>
+            ))}
+          </select>
+          <button onClick={onToggle} title="关闭" style={{
+            width: 34, height: 34, borderRadius: 10,
+            background: 'rgba(26,15,10,0.07)', color: 'var(--ink)',
+            fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'all 0.18s', border: '1px solid rgba(26,15,10,0.04)', cursor: 'pointer',
+          }}
+            onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.background = 'rgba(26,15,10,0.13)'}
+            onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.background = 'rgba(26,15,10,0.07)'}
+          >×</button>
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', letterSpacing: 0.5 }}>AI导游小慧</div>
-          <div style={{ fontSize: 10, color: 'var(--jade)', display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
-            <div style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--jade)', animation: 'pulse 2s infinite' }} />
-            灵山胜境 · 在线服务中
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 10,
+          fontSize: 11,
+          color: 'rgba(26,15,10,0.58)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+            <span style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: speaking || loading ? 'var(--gold)' : 'var(--jade)',
+              boxShadow: speaking || loading ? '0 0 0 5px rgba(201,168,76,0.14)' : '0 0 0 5px rgba(61,122,94,0.12)',
+              animation: speaking || loading ? 'pulse 1s ease infinite' : 'none',
+              flexShrink: 0,
+            }} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {speaking ? '语音讲解中' : loading ? '正在整理回答' : '在线服务中'}
+            </span>
+          </div>
+          <div style={{ color: 'rgba(61,122,94,0.82)', fontWeight: 700 }}>
+            {EMOTIONS[emotion]?.emoji} {EMOTIONS[emotion]?.label}
           </div>
         </div>
-        <div style={{ fontSize: 18, transition: 'all 0.4s' }}>{EMOTIONS[emotion]?.emoji}</div>
-        <button onClick={onToggle} style={{
-          width: 28, height: 28, borderRadius: '50%',
-          background: 'rgba(26,15,10,0.07)', color: 'var(--ink)',
-          fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          transition: 'all 0.18s', border: 'none', cursor: 'pointer',
-        }}
-          onMouseEnter={e => (e.currentTarget as HTMLButtonElement).style.background = 'rgba(26,15,10,0.14)'}
-          onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.background = 'rgba(26,15,10,0.07)'}
-        >✕</button>
       </div>
 
       {/* Speaking waveform */}
       {(speaking || loading) && (
-        <div style={{ display: 'flex', gap: 3, padding: '6px 16px', justifyContent: 'center', background: 'rgba(61,122,94,0.04)', flexShrink: 0 }}>
+        <div style={{
+          display: 'flex',
+          gap: 3,
+          padding: '7px 16px',
+          justifyContent: 'center',
+          background: 'rgba(61,122,94,0.055)',
+          borderBottom: '1px solid rgba(61,122,94,0.08)',
+          flexShrink: 0,
+        }}>
           {[6, 12, 18, 14, 8, 20, 12, 7].map((h, i) => (
             <div key={i} style={{ width: 3, height: h, background: 'var(--jade)', borderRadius: 2, animation: `wave 0.7s ease-in-out infinite`, animationDelay: `${i * 0.08}s` }} />
           ))}
@@ -355,23 +468,48 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
       )}
 
       {/* Messages */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {messages.map(msg => <Bubble key={msg.id} msg={msg} />)}
+      <div style={{
+        flex: 1,
+        overflowY: 'auto',
+        padding: '16px 15px 14px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        background: 'linear-gradient(180deg, rgba(255,252,245,0.44), rgba(244,234,216,0.30))',
+      }}>
+        {messages.map(msg => <Bubble key={msg.id} msg={msg} guideName={guideName} />)}
         {loading && <Typing />}
         <div ref={messagesEndRef} />
       </div>
 
       {/* Quick questions */}
       {showQuick && messages.length <= 1 && (
-        <div style={{ padding: '8px 12px', borderTop: '1px solid var(--border)', display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', flexShrink: 0 }}>
+        <div style={{
+          padding: '10px 12px 8px',
+          borderTop: '1px solid rgba(201,168,76,0.18)',
+          display: 'flex',
+          gap: 7,
+          overflowX: 'auto',
+          scrollbarWidth: 'none',
+          flexShrink: 0,
+          background: 'rgba(255,252,245,0.70)',
+        }}>
           {QUICK_QUESTIONS.map(q => (
             <button key={q} onClick={() => handleSend(q)} style={{
-              flexShrink: 0, padding: '5px 11px', borderRadius: 16,
-              border: '1px solid var(--border)', background: 'rgba(255,252,245,0.8)',
-              fontSize: 11, color: 'var(--ink2)', cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.18s',
+              flexShrink: 0,
+              padding: '7px 11px',
+              borderRadius: 10,
+              border: '1px solid rgba(201,168,76,0.26)',
+              background: 'rgba(255,252,245,0.9)',
+              fontSize: 11,
+              color: 'var(--ink2)',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              transition: 'all 0.18s',
+              boxShadow: '0 4px 12px rgba(26,15,10,0.04)',
             }}
-              onMouseEnter={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = 'var(--gold)'; b.style.color = 'white'; b.style.borderColor = 'var(--gold)' }}
-              onMouseLeave={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = 'rgba(255,252,245,0.8)'; b.style.color = 'var(--ink2)'; b.style.borderColor = 'var(--border)' }}
+              onMouseEnter={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = 'rgba(61,122,94,0.92)'; b.style.color = 'white'; b.style.borderColor = 'rgba(61,122,94,0.92)' }}
+              onMouseLeave={e => { const b = e.currentTarget as HTMLButtonElement; b.style.background = 'rgba(255,252,245,0.9)'; b.style.color = 'var(--ink2)'; b.style.borderColor = 'rgba(201,168,76,0.26)' }}
             >{q}</button>
           ))}
         </div>
@@ -387,15 +525,31 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
       )}
 
       {/* Input */}
-      <div style={{ padding: '10px 12px', borderTop: '1px solid var(--border)', background: 'rgba(250,245,236,0.95)', flexShrink: 0 }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+      <div style={{
+        padding: '11px 13px 13px',
+        borderTop: '1px solid rgba(201,168,76,0.22)',
+        background: 'linear-gradient(180deg, rgba(255,252,245,0.86), rgba(250,245,236,0.98))',
+        flexShrink: 0,
+      }}>
+        <div style={{
+          display: 'flex',
+          gap: 8,
+          alignItems: 'flex-end',
+          padding: 6,
+          borderRadius: 16,
+          background: 'rgba(255,252,245,0.94)',
+          border: '1px solid rgba(201,168,76,0.22)',
+          boxShadow: '0 10px 24px rgba(26,15,10,0.08)',
+        }}>
           <button
             onClick={listening ? stop : start}
             title={supported ? (listening ? '停止录音' : '语音输入') : '浏览器不支持'}
             style={{
               ...btnStyle,
-              border: `1px solid ${listening ? 'var(--red)' : 'var(--border)'}`,
-              background: listening ? 'rgba(181,52,30,0.08)' : 'rgba(255,252,245,0.8)',
+              width: 36,
+              height: 36,
+              border: `1px solid ${listening ? 'rgba(181,52,30,0.28)' : 'rgba(61,122,94,0.18)'}`,
+              background: listening ? 'rgba(181,52,30,0.08)' : 'rgba(61,122,94,0.08)',
               fontSize: 16,
               animation: listening ? 'recordPulse 1s ease infinite' : 'none',
               opacity: supported ? 1 : 0.5,
@@ -413,18 +567,18 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
               e.target.style.height = `${Math.min(e.target.scrollHeight, 72)}px`
             }}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void handleSend() } }}
-            placeholder={listening ? '正在聆听...' : '向小慧提问...（Enter发送）'}
+            placeholder={listening ? '正在聆听...' : `向 ${guideName} 提问...`}
             rows={1}
             style={{
-              flex: 1, padding: '9px 13px',
-              border: '1px solid var(--border)', borderRadius: 20,
-              background: 'rgba(255,252,245,0.85)',
+              flex: 1,
+              padding: '8px 6px 7px',
+              border: 'none',
+              borderRadius: 10,
+              background: 'transparent',
               fontSize: 13, color: 'var(--ink)', outline: 'none',
               resize: 'none', maxHeight: 72, lineHeight: 1.5,
               transition: 'border-color 0.2s', fontFamily: 'inherit',
             }}
-            onFocus={e => (e.target as HTMLTextAreaElement).style.borderColor = 'var(--jade)'}
-            onBlur={e => (e.target as HTMLTextAreaElement).style.borderColor = 'var(--border)'}
           />
 
           <button
@@ -432,6 +586,8 @@ export default function FloatingAvatar({ open, onToggle, onAvatarUpdate, selecte
             disabled={!text.trim() || loading}
             style={{
               ...btnStyle,
+              width: 36,
+              height: 36,
               border: 'none',
               background: (!text.trim() || loading) ? 'rgba(61,122,94,0.35)' : 'linear-gradient(135deg,var(--jade),var(--jade2))',
               color: 'white', fontSize: 16,

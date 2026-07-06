@@ -1,26 +1,26 @@
 """
 RAG 知识库服务 青春版 - Qwen3-Embedding-0.6B Embedding + ChromaDB 向量检索
 """
-# TODO 待完善为动态从数据库加载知识文档，并支持在线更新（增删改）
+# 已支持从数据库与 backend/uploads 动态加载知识文档，并可在线增删改。
 # TODO 后续可增加 RAG 生成式检索（RAG-Gen）
 # TODO 后续可增加用户画像和会话上下文感知的个性化检索
 # TODO 后续可增加多模态检索（图像内容 + 文本查询）
 from __future__ import annotations
 
 import os
-import uuid
-from typing import Optional
-from openai import AsyncOpenAI
+import csv
+import hashlib
+import json
+import re
+import time
+from pathlib import Path
+from threading import RLock
 import asyncio
 
-import chromadb
-from chromadb import EmbeddingFunction, Documents, Embeddings
-from chromadb.utils import embedding_functions
-from sentence_transformers import SentenceTransformer
-import torch
-
 from app.core.config import settings
-from app.agent.qwen_client import qwen_client
+from app.core.logging import brief_text, elapsed_ms, get_logger
+
+logger = get_logger(__name__)
 
 # 灵山胜境知识库(战损测试版)
 LINGSHAN_KNOWLEDGE = [
@@ -187,206 +187,721 @@ LINGSHAN_KNOWLEDGE = [
 ]
 
 
-# Qwen Embedding 函数（供 ChromaDB 使用
-class QwenEmbeddingFunction(EmbeddingFunction):
+# Qwen Embedding 函数（供 ChromaDB 使用）
+class QwenEmbeddingFunction:
     """
     修改后的 Embedding 函数：
     """
     def __init__(self, service: 'RAGService'):
         self.service = service
 
-    def __call__(self, input: Documents) -> Embeddings:
+    def __call__(self, input: list[str]) -> list[list[float]]:
         # ChromaDB 的内置接口是同步的，这里使用内部 service 的同步包装方法
         return asyncio.run(self.service.embed_batch(input))
 
-class MyLocalQwenEF(EmbeddingFunction):
+class MyLocalQwenEF:
     def __init__(self, model):
         self.model = model
-    def __call__(self, input: Documents) -> Embeddings:
+    def __call__(self, input: list[str]) -> list[list[float]]:
         return self.model.encode(input).tolist()
 
 class RAGService:
+    """
+    RAG 检索服务。
+
+    知识来源不再是文件内硬编码的字符串数组，而是：
+    1. knowledge_docs 表中的 active 文档；
+    2. backend/uploads 中尚未登记到数据库的本地文件。
+
+    数据库记录是在线增删改的主入口，file_path 只作为本地文件来源/存档。
+    """
+
+    SUPPORTED_FILE_SUFFIXES = {
+        ".txt", ".md", ".markdown", ".csv", ".json", ".docx", ".xlsx"
+    }
+    TEXT_FILE_SUFFIXES = {".txt", ".md", ".markdown"}
+    CHUNK_SIZE = 1000
+    CHUNK_OVERLAP = 150
+
     def __init__(self):
         self._initialized = False
         self.collection = None
+        self.db_client = None
+        self.model = None
+        self.emb_fn = None
+        self.documents: list[dict] = []
+        self._index_lock = RLock()
+
+        self.backend_dir = Path(__file__).resolve().parents[2]
+        self.upload_dir = self._resolve_data_dir(settings.UPLOAD_DIR, "uploads")
+        self.chroma_dir = self._resolve_data_dir(settings.CHROMA_DB_DIR, "chroma_db")
         self.model_path = settings.EMBEDDING_MODEL_PATH
-        
-        self.client = AsyncOpenAI(
-            api_key=settings.DASHSCOPE_API_KEY, 
-            base_url=settings.VLLM_EMBED_BASE_URL
-        )
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.embed_model = settings.EMBEDDING_MODEL 
-        self.emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-                model_name=self.model_path,
-                device=self.device,
-                trust_remote_code=True,
-                model_kwargs={
-                    # "attn_implementation": "flash_attention_2", 
-                    "attn_implementation": "sdpa", 
-                    "torch_dtype": torch.float16 if self.device == "cuda" else torch.float32
-                },
-                # 设置默认 Prompt
-                # 官方建议：查询时使用指令提升 1-5% 的效果
-                default_prompt_name="query" 
-            )
+
+        self.client = None
+        self.device = None
+        self.embed_model = settings.EMBEDDING_MODEL
+
+    def _resolve_data_dir(self, configured_path: str, default_name: str) -> Path:
+        """Resolve app data dirs relative to backend/ even when cwd is repo root."""
+        raw = Path(configured_path or default_name)
+        if raw.is_absolute():
+            return raw
+
+        backend_path = (self.backend_dir / raw).resolve()
+        cwd_path = raw.resolve()
+        if backend_path.exists() or not cwd_path.exists():
+            return backend_path
+        return cwd_path
+
+    def _resolve_file_path(self, file_path: str | os.PathLike | None) -> Path | None:
+        if not file_path:
+            return None
+
+        raw = Path(file_path)
+        if raw.is_absolute():
+            return raw
+
+        candidates = [
+            (self.backend_dir / raw).resolve(),
+            (self.backend_dir.parent / raw).resolve(),
+            raw.resolve(),
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
+
+    def initialize(self, force_reload: bool = False):
+        """同步初始化 Chroma，并从数据库/本地文件重建索引。"""
+        start = time.perf_counter()
+        with self._index_lock:
+            if self._initialized and not force_reload:
+                logger.info("rag initialize skipped already_initialized=true")
+                return
+
+            self.documents = self._load_source_documents()
+            try:
+                import chromadb
+                from sentence_transformers import SentenceTransformer
+                import torch
+
+                if self.device is None:
+                    self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
+                if self.emb_fn is None:
+                    logger.info(
+                        "rag loading embedding model path=%s device=%s docs=%s",
+                        self.model_path,
+                        self.device,
+                        len(self.documents),
+                    )
+                    self.model = SentenceTransformer(
+                        self.model_path,
+                        device=self.device,
+                        trust_remote_code=True,
+                        model_kwargs={"attn_implementation": "sdpa"},
+                    )
+                    self.emb_fn = MyLocalQwenEF(self.model)
+
+                os.makedirs(self.chroma_dir, exist_ok=True)
+                self.db_client = chromadb.PersistentClient(path=str(self.chroma_dir))
+                self.collection = self.db_client.get_or_create_collection(
+                    name="LinXi_knowledge_base",
+                    metadata={"hnsw:space": "cosine"},
+                    embedding_function=self.emb_fn,
+                )
+
+                self._rebuild_index(self.documents)
+                self._initialized = True
+                logger.info(
+                    "rag initialized docs=%s chunks=%s chroma_dir=%s duration_ms=%s",
+                    len(self.documents),
+                    self.collection.count(),
+                    self.chroma_dir,
+                    elapsed_ms(start),
+                )
+            except Exception as e:
+                self.collection = None
+                self._initialized = False
+                logger.exception(
+                    "rag initialize failed, fallback keyword only duration_ms=%s error=%s",
+                    elapsed_ms(start),
+                    e,
+                )
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """批量向量化实现"""
+        """批量向量化实现，保留给云端/HTTP embedding 方案使用。"""
         try:
+            if self.client is None:
+                from openai import AsyncOpenAI
+                self.client = AsyncOpenAI(
+                    api_key=settings.DASHSCOPE_API_KEY,
+                    base_url=settings.VLLM_EMBED_BASE_URL,
+                )
             response = await self.client.embeddings.create(
                 model=self.embed_model,
                 input=texts,
                 dimensions=1024 if "v4" in self.embed_model.lower() else None,
-                encoding_format="float"
+                encoding_format="float",
             )
             return [item.embedding for item in response.data]
         except Exception as e:
             print(f"❌ 批量 Embedding 失败: {e}")
             raise e
 
-    # def initialize(self):
-    #     """同步初始化"""
-    #     if self._initialized: return
-        
-    #     try:
-    #         os.makedirs(settings.CHROMA_DB_DIR, exist_ok=True)
-    #         db_client = chromadb.PersistentClient(path=settings.CHROMA_DB_DIR)
+    def _builtin_documents(self) -> list[dict]:
+        return [
+            {
+                "id": doc.get("id", f"builtin_{index}"),
+                "title": doc.get("title", ""),
+                "category": doc.get("category", "general"),
+                "content": doc.get("content", ""),
+                "file_path": "",
+                "source": "builtin",
+                "db_id": None,
+            }
+            for index, doc in enumerate(LINGSHAN_KNOWLEDGE)
+            if (doc.get("content") or "").strip()
+        ]
 
+    def _truncate_for_chat(self, doc: dict) -> dict:
+        content = doc.get("content") or ""
+        limit = settings.RAG_MAX_DOC_CHARS_FOR_CHAT
+        if len(content) <= limit:
+            return doc
 
-    #         # 将 self 传给 EF，使其能调用统一的 embed_batch
-    #         custom_ef = QwenEmbeddingFunction(self)
+        truncated = doc.copy()
+        truncated["content"] = content[:limit]
+        truncated["content_truncated"] = True
+        truncated["original_content_chars"] = len(content)
+        logger.warning(
+            "rag document truncated for chat title=%s source=%s original_chars=%s kept_chars=%s file_path=%s",
+            brief_text(doc.get("title"), 80),
+            doc.get("source"),
+            len(content),
+            limit,
+            doc.get("file_path", ""),
+        )
+        return truncated
 
-    #         collection_name = f"lingshan_{self.embed_model.replace('-', '_')}"
-            
-    #         self.collection = db_client.get_or_create_collection(
-    #             name=collection_name,
-    #             embedding_function=custom_ef,
-    #             metadata={"hnsw:space": "cosine"},
-    #         )
+    def _limit_documents_for_chat(self, docs: list[dict]) -> list[dict]:
+        limited: list[dict] = []
+        total = 0
+        total_limit = settings.RAG_MAX_TOTAL_CHARS_FOR_CHAT
+        for doc in docs:
+            truncated = self._truncate_for_chat(doc)
+            content_len = len(truncated.get("content") or "")
+            if total + content_len > total_limit and limited:
+                logger.warning(
+                    "rag source documents total limit reached kept_docs=%s total_chars=%s total_limit=%s skipped_title=%s",
+                    len(limited),
+                    total,
+                    total_limit,
+                    brief_text(doc.get("title"), 80),
+                )
+                break
+            limited.append(truncated)
+            total += content_len
+            if total >= total_limit:
+                logger.warning(
+                    "rag source documents total limit reached kept_docs=%s total_chars=%s total_limit=%s",
+                    len(limited),
+                    total,
+                    total_limit,
+                )
+                break
+        return limited
 
-    #         if self.collection.count() == 0:
-    #             self._index_knowledge(LINGSHAN_KNOWLEDGE)
-    #             print(f"✅ 已索引 {len(LINGSHAN_KNOWLEDGE)} 条灵山胜境知识")
+    def _load_source_documents(self) -> list[dict]:
+        db_docs, known_file_paths = self._load_database_documents()
+        file_docs = self._load_standalone_upload_documents(known_file_paths)
+        builtin_docs = self._builtin_documents()
+        docs = self._limit_documents_for_chat(db_docs + file_docs + builtin_docs)
+        logger.info(
+            "rag source documents loaded db_docs=%s file_docs=%s builtin_docs=%s total=%s",
+            len(db_docs),
+            len(file_docs),
+            len(builtin_docs),
+            len(docs),
+        )
+        return docs
 
-    #         self._initialized = True
-    #         print(f"🚀 RAG 成功启动！模式: {'云端API' if 'dashscope' in settings.VLLM_EMBED_BASE_URL else '本地vLLM'}")
-    #     except Exception as e:
-    #         print(f"❌ RAG 初始化崩溃: {e}")
-    #         self._initialized = False
+    def _load_database_documents(self) -> tuple[list[dict], set[str]]:
+        docs: list[dict] = []
+        known_file_paths: set[str] = set()
 
-    def initialize(self):
-        if self._initialized: return
         try:
-            print(f"Loading embedding model to {self.device}...")
-            self.model = SentenceTransformer(self.model_path, device=self.device)
-            local_model = SentenceTransformer(
-                    self.model_path, 
-                    device=self.device,
-                    trust_remote_code=True,
-                    model_kwargs={"attn_implementation": "sdpa"}
-                )            
-            self.emb_fn = MyLocalQwenEF(local_model)
-            # 初始化 ChromaDB
-            os.makedirs(settings.CHROMA_DB_DIR, exist_ok=True)
-            db_client = chromadb.PersistentClient(path=settings.CHROMA_DB_DIR)
+            from app.models.database import KnowledgeDoc, SessionLocal
+        except Exception as e:
+            print(f"⚠️ 无法导入知识库数据库模型: {e}")
+            return docs, known_file_paths
 
-            self.collection = db_client.get_or_create_collection(
-                name="LinXi_knowledge_base",
-                metadata={"hnsw:space": "cosine"},
-                embedding_function=self.emb_fn
+        db = SessionLocal()
+        try:
+            rows = db.query(KnowledgeDoc).all()
+            for row in rows:
+                file_path = self._resolve_file_path(row.file_path)
+                if file_path:
+                    known_file_paths.add(str(file_path.resolve()))
+
+                if not row.is_active:
+                    continue
+
+                content = (row.content or "").strip()
+                if not content and file_path and file_path.exists():
+                    content = self.extract_file_content(
+                        file_path,
+                        max_chars=settings.RAG_MAX_DOC_CHARS_FOR_CHAT,
+                    ).strip()
+                if not content:
+                    print(f"⚠️ 知识文档 {row.id} 内容为空，已跳过")
+                    continue
+
+                docs.append({
+                    "id": self._source_id(row.id),
+                    "title": (row.title or (file_path.stem if file_path else f"知识文档 {row.id}")).strip(),
+                    "category": (row.category or "general").strip(),
+                    "content": content,
+                    "file_path": str(file_path) if file_path else "",
+                    "source": "database",
+                    "db_id": row.id,
+                })
+        except Exception as e:
+            print(f"⚠️ 从数据库加载知识文档失败: {e}")
+        finally:
+            db.close()
+
+        return docs, known_file_paths
+
+    def _load_standalone_upload_documents(self, known_file_paths: set[str]) -> list[dict]:
+        docs: list[dict] = []
+        if not self.upload_dir.exists():
+            return docs
+
+        for file_path in sorted(self.upload_dir.rglob("*")):
+            if not file_path.is_file():
+                continue
+            if file_path.suffix.lower() not in self.SUPPORTED_FILE_SUFFIXES:
+                continue
+            resolved = str(file_path.resolve())
+            if resolved in known_file_paths:
+                continue
+            file_size = file_path.stat().st_size
+            if (
+                not settings.RAG_INITIALIZE_ON_CHAT
+                and file_size > settings.RAG_MAX_UPLOAD_FILE_BYTES_FOR_CHAT
+            ):
+                logger.warning(
+                    "rag upload file skipped for chat because too large path=%s size_bytes=%s limit_bytes=%s",
+                    file_path,
+                    file_size,
+                    settings.RAG_MAX_UPLOAD_FILE_BYTES_FOR_CHAT,
+                )
+                continue
+
+            try:
+                content = self.extract_file_content(
+                    file_path,
+                    max_chars=settings.RAG_MAX_DOC_CHARS_FOR_CHAT,
+                ).strip()
+            except Exception as e:
+                print(f"⚠️ 解析上传文件失败，已跳过 {file_path}: {e}")
+                continue
+            if not content:
+                continue
+
+            docs.append({
+                "id": self._file_source_id(file_path),
+                "title": file_path.stem,
+                "category": "general",
+                "content": content,
+                "file_path": resolved,
+                "source": "upload_file",
+                "db_id": None,
+            })
+        return docs
+
+    def extract_file_content(
+        self,
+        file_path: str | os.PathLike,
+        max_chars: int | None = None,
+    ) -> str:
+        """Extract text from a supported knowledge file."""
+        path = self._resolve_file_path(file_path)
+        if path is None or not path.exists():
+            raise FileNotFoundError(f"知识库文件不存在: {file_path}")
+
+        suffix = path.suffix.lower()
+        if suffix in self.TEXT_FILE_SUFFIXES:
+            return self._limit_text(self._read_text_file(path), max_chars, path)
+        if suffix == ".csv":
+            return self._extract_csv(path, max_chars=max_chars)
+        if suffix == ".json":
+            return self._limit_text(self._extract_json(path), max_chars, path)
+        if suffix == ".docx":
+            return self._extract_docx(path, max_chars=max_chars)
+        if suffix == ".xlsx":
+            return self._extract_xlsx(path, max_chars=max_chars)
+        raise ValueError(f"不支持的知识库文件格式: {suffix}")
+
+    def _limit_text(self, text: str, max_chars: int | None, path: Path) -> str:
+        if max_chars is None or len(text) <= max_chars:
+            return text
+        logger.warning(
+            "rag file content limited path=%s original_chars=%s kept_chars=%s",
+            path,
+            len(text),
+            max_chars,
+        )
+        return text[:max_chars]
+
+    def _read_text_file(self, path: Path) -> str:
+        last_error: Exception | None = None
+        for encoding in ("utf-8", "utf-8-sig", "gb18030"):
+            try:
+                return path.read_text(encoding=encoding)
+            except UnicodeDecodeError as e:
+                last_error = e
+        if last_error:
+            raise last_error
+        return path.read_text(encoding="utf-8")
+
+    def _append_limited_part(
+        self,
+        parts: list[str],
+        value: str,
+        max_chars: int | None,
+        path: Path,
+    ) -> bool:
+        if not value:
+            return False
+        parts.append(value)
+        if max_chars is not None and sum(len(part) + 1 for part in parts) >= max_chars:
+            logger.warning("rag file parsing stopped at max_chars path=%s max_chars=%s", path, max_chars)
+            return True
+        return False
+
+    def _join_limited_parts(self, parts: list[str], max_chars: int | None) -> str:
+        text = "\n".join(parts)
+        if max_chars is not None and len(text) > max_chars:
+            return text[:max_chars]
+        return text
+
+    def _extract_csv(self, path: Path, max_chars: int | None = None) -> str:
+        text = self._read_text_file(path)
+        rows = []
+        for row in csv.reader(text.splitlines()):
+            values = [cell.strip() for cell in row if cell and cell.strip()]
+            if values:
+                if self._append_limited_part(rows, " | ".join(values), max_chars, path):
+                    break
+        return self._join_limited_parts(rows, max_chars)
+
+    def _extract_json(self, path: Path) -> str:
+        text = self._read_text_file(path)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        return json.dumps(data, ensure_ascii=False, indent=2)
+
+    def _extract_docx(self, path: Path, max_chars: int | None = None) -> str:
+        try:
+            from docx import Document
+        except ImportError as e:
+            raise RuntimeError("解析 .docx 需要安装 python-docx") from e
+
+        document = Document(str(path))
+        parts: list[str] = []
+        for paragraph in document.paragraphs:
+            text = paragraph.text.strip()
+            if text:
+                if self._append_limited_part(parts, text, max_chars, path):
+                    return self._join_limited_parts(parts, max_chars)
+        for table in document.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if cells:
+                    if self._append_limited_part(parts, " | ".join(cells), max_chars, path):
+                        return self._join_limited_parts(parts, max_chars)
+        return self._join_limited_parts(parts, max_chars)
+
+    def _extract_xlsx(self, path: Path, max_chars: int | None = None) -> str:
+        try:
+            from openpyxl import load_workbook
+        except ImportError as e:
+            raise RuntimeError("解析 .xlsx 需要安装 openpyxl") from e
+
+        workbook = load_workbook(str(path), read_only=True, data_only=True)
+        parts: list[str] = []
+        try:
+            for sheet in workbook.worksheets:
+                if self._append_limited_part(parts, f"【工作表：{sheet.title}】", max_chars, path):
+                    break
+                for row in sheet.iter_rows(values_only=True):
+                    values = [str(value).strip() for value in row if value not in (None, "")]
+                    if values:
+                        if self._append_limited_part(parts, " | ".join(values), max_chars, path):
+                            return self._join_limited_parts(parts, max_chars)
+        finally:
+            workbook.close()
+        return self._join_limited_parts(parts, max_chars)
+
+    def _rebuild_index(self, docs: list[dict]):
+        if self.collection is None:
+            return
+        self._clear_collection()
+        self._add_documents_to_collection(docs)
+
+    def _clear_collection(self):
+        try:
+            existing = self.collection.get()
+            ids = existing.get("ids", []) if existing else []
+            if ids:
+                self.collection.delete(ids=ids)
+        except Exception as e:
+            print(f"⚠️ 清空旧 RAG 索引失败: {e}")
+
+    def _add_documents_to_collection(self, docs: list[dict]):
+        if self.collection is None:
+            return
+
+        ids: list[str] = []
+        contents: list[str] = []
+        metadatas: list[dict] = []
+
+        for doc in docs:
+            chunks = self._chunk_text(doc.get("content", ""))
+            for index, chunk in enumerate(chunks):
+                ids.append(f"{doc['id']}::chunk_{index:04d}")
+                contents.append(chunk)
+                metadatas.append({
+                    "doc_id": doc["id"],
+                    "title": doc.get("title", ""),
+                    "category": doc.get("category", "general"),
+                    "source": doc.get("source", "database"),
+                    "file_path": doc.get("file_path", ""),
+                    "chunk_index": index,
+                })
+
+        if not ids:
+            return
+
+        batch_size = 64
+        for start in range(0, len(ids), batch_size):
+            end = start + batch_size
+            self.collection.add(
+                ids=ids[start:end],
+                documents=contents[start:end],
+                metadatas=metadatas[start:end],
             )
 
-            if self.collection.count() == 0:
-                self._index_knowledge(LINGSHAN_KNOWLEDGE)
-            
-            self._initialized = True
-            print("✅ RAG 服务已通过本地模型路径启动")
-        except Exception as e:
-            print(f"❌ RAG 本地加载失败: {e}")
+    def _chunk_text(self, text: str) -> list[str]:
+        text = re.sub(r"\n{3,}", "\n\n", (text or "").strip())
+        if not text:
+            return []
+        if len(text) <= self.CHUNK_SIZE:
+            return [text]
 
-    def _index_knowledge(self, docs: list[dict]):
-        """将知识文档索引到向量库"""
-        self.collection.add(
-            ids=[d["id"] for d in docs],
-            documents=[d["content"] for d in docs],
-            metadatas=[{"title": d["title"], "category": d["category"]} for d in docs],
-        )
+        chunks: list[str] = []
+        current = ""
+        paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+        for paragraph in paragraphs:
+            if len(paragraph) > self.CHUNK_SIZE:
+                if current:
+                    chunks.append(current.strip())
+                    current = ""
+                chunks.extend(self._split_long_text(paragraph))
+                continue
+
+            candidate = f"{current}\n\n{paragraph}" if current else paragraph
+            if len(candidate) <= self.CHUNK_SIZE:
+                current = candidate
+            else:
+                if current:
+                    chunks.append(current.strip())
+                current = paragraph
+
+        if current:
+            chunks.append(current.strip())
+        return chunks
+
+    def _split_long_text(self, text: str) -> list[str]:
+        chunks: list[str] = []
+        step = max(1, self.CHUNK_SIZE - self.CHUNK_OVERLAP)
+        for start in range(0, len(text), step):
+            chunk = text[start:start + self.CHUNK_SIZE].strip()
+            if chunk:
+                chunks.append(chunk)
+        return chunks
+
+    def _source_id(self, doc_id: str | int) -> str:
+        value = str(doc_id)
+        if value.startswith(("db_", "file_")):
+            return value
+        if value.isdigit():
+            return f"db_{value}"
+        return value
+
+    def _file_source_id(self, file_path: Path) -> str:
+        try:
+            relative = file_path.relative_to(self.upload_dir)
+        except ValueError:
+            relative = file_path.name
+        digest = hashlib.sha1(str(relative).encode("utf-8")).hexdigest()[:12]
+        return f"file_{digest}"
+
+    def safe_filename(self, filename: str) -> str:
+        name = Path(filename or "knowledge").name
+        stem = re.sub(r"[^\w.\-\u4e00-\u9fff]+", "_", name, flags=re.UNICODE).strip("._")
+        return stem[:100] or "knowledge"
+
+    def write_text_document_file(self, doc_id: str | int, title: str, content: str) -> str:
+        os.makedirs(self.upload_dir, exist_ok=True)
+        safe_title = self.safe_filename(title or f"knowledge_{doc_id}")
+        file_path = self.upload_dir / f"db_{doc_id}_{safe_title}.md"
+        file_path.write_text(content or "", encoding="utf-8")
+        return str(file_path)
+
+    def _delete_source(self, source_id: str):
+        if self.collection is None:
+            return
+        try:
+            existing = self.collection.get(where={"doc_id": source_id})
+            ids = existing.get("ids", []) if existing else []
+            if ids:
+                self.collection.delete(ids=ids)
+        except Exception as e:
+            print(f"⚠️ 删除旧知识片段失败 {source_id}: {e}")
+
+    def _upsert_snapshot(self, doc: dict):
+        self.documents = [item for item in self.documents if item.get("id") != doc.get("id")]
+        if (doc.get("content") or "").strip():
+            self.documents.append(doc)
+
+    def _build_runtime_doc(
+        self,
+        doc_id: str | int,
+        title: str,
+        category: str,
+        content: str,
+        file_path: str | None = None,
+    ) -> dict:
+        resolved_file = self._resolve_file_path(file_path)
+        return {
+            "id": self._source_id(doc_id),
+            "title": title or "未命名知识文档",
+            "category": category or "general",
+            "content": content or "",
+            "file_path": str(resolved_file) if resolved_file else "",
+            "source": "database",
+            "db_id": int(doc_id) if str(doc_id).isdigit() else None,
+        }
 
     async def search(self, query: str, top_k: int = None) -> list[dict]:
-        """语义检索"""
+        """语义检索；向量不可用时降级为基于数据库/文件快照的关键词检索。"""
+        start = time.perf_counter()
         k = top_k or settings.RAG_TOP_K
-        if not self._initialized or self.collection is None:
+        if not query or not query.strip():
+            logger.info("rag search skipped empty query")
             return []
 
-        try:
-            # 这里的 query 会自动触发 QwenEmbeddingFunction.__call__
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=min(k, self.collection.count() or 1),
+        if not self._initialized:
+            if not settings.RAG_INITIALIZE_ON_CHAT:
+                if not self.documents:
+                    self.documents = self._load_source_documents()
+                docs = self._keyword_search(query, k)
+                logger.info(
+                    "rag search keyword fallback because not initialized query=%s docs=%s top_score=%s duration_ms=%s",
+                    brief_text(query, 120),
+                    len(docs),
+                    docs[0].get("score") if docs else None,
+                    elapsed_ms(start),
+                )
+                return docs
+            self.initialize()
+
+        if self.collection is None:
+            docs = self._keyword_search(query, k)
+            logger.info(
+                "rag search keyword fallback no collection query=%s docs=%s top_score=%s duration_ms=%s",
+                brief_text(query, 120),
+                len(docs),
+                docs[0].get("score") if docs else None,
+                elapsed_ms(start),
             )
-            
+            return docs
+
+        try:
+            with self._index_lock:
+                count = self.collection.count()
+                if count <= 0:
+                    docs = self._keyword_search(query, k)
+                    logger.info(
+                        "rag search keyword fallback empty collection query=%s docs=%s top_score=%s duration_ms=%s",
+                        brief_text(query, 120),
+                        len(docs),
+                        docs[0].get("score") if docs else None,
+                        elapsed_ms(start),
+                    )
+                    return docs
+                results = self.collection.query(
+                    query_texts=[query],
+                    n_results=min(k, count),
+                )
+
             docs = []
-            if results["documents"] and results["documents"][0]:
+            if results.get("documents") and results["documents"][0]:
                 for i, content in enumerate(results["documents"][0]):
-                    meta = results["metadatas"][0][i]
+                    meta = results["metadatas"][0][i] if results.get("metadatas") else {}
                     dist = results["distances"][0][i] if results.get("distances") else 0.5
                     docs.append({
+                        "id": meta.get("doc_id", ""),
                         "title": meta.get("title", ""),
                         "category": meta.get("category", ""),
                         "content": content,
                         "score": round(max(0.0, 1.0 - dist), 4),
+                        "source": meta.get("source", ""),
+                        "file_path": meta.get("file_path", ""),
                     })
+            logger.info(
+                "rag search vector done query=%s collection_count=%s docs=%s top_score=%s duration_ms=%s",
+                brief_text(query, 120),
+                count,
+                len(docs),
+                docs[0].get("score") if docs else None,
+                elapsed_ms(start),
+            )
             return docs
         except Exception as e:
-            print(f"⚠️ 语义检索出错: {e}")
-            return []
-
-    def _index_knowledge_local(self, docs: list[dict]):
-        """将知识文档索引到向量库"""
-        self.collection.add(
-            ids=[d["id"] for d in docs],
-            documents=[d["content"] for d in docs],
-            metadatas=[{"title": d["title"], "category": d["category"]} for d in docs],
-        )
+            logger.exception(
+                "rag search vector failed, fallback keyword query=%s duration_ms=%s error=%s",
+                brief_text(query, 120),
+                elapsed_ms(start),
+                e,
+            )
+            docs = self._keyword_search(query, k)
+            logger.info(
+                "rag search keyword after vector failure docs=%s top_score=%s duration_ms=%s",
+                len(docs),
+                docs[0].get("score") if docs else None,
+                elapsed_ms(start),
+            )
+            return docs
 
     async def search_local(self, query: str, top_k: int = None) -> list[dict]:
-        """
-        语义检索相关知识片段
-
-        Returns:
-            list of {"title": str, "content": str, "category": str, "score": float}
-        """
-        k = top_k or settings.RAG_TOP_K
-        if not self._initialized or self.collection is None:
-            return self._keyword_search(query, k)
-
-        try:
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=min(k, max(self.collection.count(), 1)),
-            )
-            docs = []
-            if results["documents"] and results["documents"][0]:
-                for i, content in enumerate(results["documents"][0]):
-                    meta = results["metadatas"][0][i] if results["metadatas"] else {}
-                    dist = results["distances"][0][i] if results.get("distances") else 0.0
-                    score = max(0.0, 1.0 - dist)  # 余弦距离转相似度
-                    docs.append({
-                        "title": meta.get("title", ""),
-                        "category": meta.get("category", ""),
-                        "content": content,
-                        "score": round(score, 4),
-                    })
-            return docs
-        except Exception as e:
-            print(f"⚠️  向量检索失败，降级到关键词检索: {e}")
-            return self._keyword_search(query, k)
+        """兼容旧调用。"""
+        return await self.search(query, top_k)
 
     def _keyword_search(self, query: str, top_k: int) -> list[dict]:
-        """关键词检索降级方案"""
+        """关键词检索降级方案，使用当前数据库/文件快照。"""
+        start = time.perf_counter()
+        if not self.documents:
+            self.documents = self._load_source_documents()
+
         scored = []
         query_lower = query.lower()
+        terms = [term for term in re.split(r"\s+", query_lower) if term]
 
         category_keywords = {
             "history": ["历史", "渊源", "唐", "宋", "玄奘", "千年"],
@@ -397,81 +912,147 @@ class RAGService:
             "dining": ["餐饮", "吃饭", "素斋", "住宿", "酒店"],
             "nianhewan": ["拈花湾", "小镇", "花海", "灯光秀"],
             "temple": ["禅寺", "祥符", "撞钟", "银杏", "古井"],
+            "general": [],
         }
 
-        for doc in LINGSHAN_KNOWLEDGE:
+        for doc in self.documents:
+            content = (doc.get("content") or "")[:settings.RAG_MAX_DOC_CHARS_FOR_CHAT]
+            title = doc.get("title", "")
+            content_lower = content.lower()
+            title_lower = title.lower()
             score = 0.0
-            content_lower = doc["content"].lower()
-            title_lower = doc["title"].lower()
 
-            # 内容匹配
-            for char in query_lower:
-                if char in content_lower:
-                    score += 0.1
-            # 标题匹配（权重更高）
-            for char in query_lower:
-                if char in title_lower:
-                    score += 0.3
+            for term in terms:
+                if term in title_lower:
+                    score += 3.0
+                if term in content_lower:
+                    score += 1.5
 
-            # 类别关键词加权
-            for cat, kws in category_keywords.items():
-                if doc["category"] == cat and any(kw in query for kw in kws):
+            for char in query_lower:
+                if char.strip() and char in title_lower:
+                    score += 0.15
+                if char.strip() and char in content_lower:
+                    score += 0.05
+
+            for cat, keywords in category_keywords.items():
+                if doc.get("category") == cat and any(keyword in query for keyword in keywords):
                     score += 2.0
 
             if score > 0:
                 scored.append((score, doc))
 
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [
+        scored.sort(key=lambda item: item[0], reverse=True)
+        results = [
             {
-                "title": d["title"],
-                "category": d["category"],
-                "content": d["content"],
-                "score": round(s / 10, 4),
+                "id": doc.get("id", ""),
+                "title": doc.get("title", ""),
+                "category": doc.get("category", ""),
+                "content": doc.get("content", ""),
+                "score": round(min(1.0, score / 10), 4),
+                "source": doc.get("source", ""),
+                "file_path": doc.get("file_path", ""),
             }
-            for s, d in scored[:top_k]
+            for score, doc in scored[:top_k]
         ]
+        logger.debug(
+            "rag keyword search done query=%s source_docs=%s matched=%s returned=%s duration_ms=%s",
+            brief_text(query, 120),
+            len(self.documents),
+            len(scored),
+            len(results),
+            elapsed_ms(start),
+        )
+        return results
 
-    async def add_document(self, doc_id: str, title: str, category: str, content: str):
-        """动态添加文档到知识库"""
-        if self.collection is None:
-            return
-        try:
-            self.collection.add(
-                ids=[doc_id],
-                documents=[content],
-                metadatas=[{"title": title, "category": category}],
-            )
-        except Exception as e:
-            print(f"添加文档失败: {e}")
+    def _index_knowledge(self, docs: list[dict]):
+        """兼容旧方法：将传入文档直接写入当前向量库。"""
+        normalized = []
+        for doc in docs:
+            normalized.append({
+                "id": str(doc.get("id")),
+                "title": doc.get("title", ""),
+                "category": doc.get("category", "general"),
+                "content": doc.get("content", ""),
+                "file_path": doc.get("file_path", ""),
+                "source": doc.get("source", "manual"),
+                "db_id": doc.get("db_id"),
+            })
+        self._add_documents_to_collection(normalized)
 
-    async def delete_document(self, doc_id: str):
-        """删除文档"""
-        if self.collection is None:
-            return
-        try:
-            self.collection.delete(ids=[doc_id])
-        except Exception as e:
-            print(f"删除文档失败: {e}")
+    def _index_knowledge_local(self, docs: list[dict]):
+        """兼容旧方法。"""
+        self._index_knowledge(docs)
+
+    async def add_document(
+        self,
+        doc_id: str | int,
+        title: str,
+        category: str,
+        content: str,
+        file_path: str | None = None,
+    ):
+        """在线新增文档，并同步写入 Chroma。"""
+        doc = self._build_runtime_doc(doc_id, title, category, content, file_path)
+        with self._index_lock:
+            if not self._initialized:
+                self.initialize()
+            self._upsert_snapshot(doc)
+            if self.collection is None:
+                return
+            self._delete_source(doc["id"])
+            self._add_documents_to_collection([doc])
+
+    async def update_document(
+        self,
+        doc_id: str | int,
+        title: str,
+        category: str,
+        content: str,
+        file_path: str | None = None,
+    ):
+        """在线更新文档，等价于删除旧片段后重新索引。"""
+        await self.add_document(doc_id, title, category, content, file_path)
+
+    async def delete_document(self, doc_id: str | int):
+        """在线删除文档的所有向量片段。"""
+        source_id = self._source_id(doc_id)
+        with self._index_lock:
+            if not self._initialized:
+                self.initialize()
+            self.documents = [doc for doc in self.documents if doc.get("id") != source_id]
+            self._delete_source(source_id)
+
+    async def reload_from_database(self):
+        """重新从数据库和 backend/uploads 文件扫描并重建索引。"""
+        with self._index_lock:
+            if not self._initialized:
+                self.initialize(force_reload=True)
+                return
+            self.documents = self._load_source_documents()
+            self._rebuild_index(self.documents)
 
     def get_all_documents(self) -> list[dict]:
-        """返回所有内置知识文档"""
-        return LINGSHAN_KNOWLEDGE
+        """获取当前数据库/文件知识快照。"""
+        if not self.documents:
+            self.documents = self._load_source_documents()
+        return [doc.copy() for doc in self.documents]
 
     def format_context(self, docs: list[dict], max_chars: int = 2000) -> str:
-        """将检索结果格式化为 Prompt 上下文"""
+        """将检索结果格式化为 Prompt 上下文。"""
         if not docs:
             return "（未检索到相关景区知识，请根据通用佛教文化知识回答）"
         parts = []
         total = 0
         for doc in docs:
-            snippet = f"【{doc['title']}】（相关度{doc['score']:.0%}）\n{doc['content']}"
+            title = doc.get("title", "未命名知识")
+            score = doc.get("score", 0)
+            content = doc.get("content", "")
+            snippet = f"【{title}】（相关度{score:.0%}）\n{content}"
             if total + len(snippet) > max_chars:
                 break
             parts.append(snippet)
             total += len(snippet)
         return "\n\n---\n\n".join(parts)
-    
 
 # 全局单例
 rag_service = RAGService()

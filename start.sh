@@ -69,4 +69,4 @@ echo ""
 echo -e "${YELLOW}按 Ctrl+C 停止服务${NC}"
 echo "----------------------------------------"
 
-uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload
+uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload --reload-include '*.py' --reload-exclude 'ai_guide.db*' --reload-exclude 'chroma_db/*' --reload-exclude 'uploads/*'

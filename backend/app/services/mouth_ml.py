@@ -9,15 +9,43 @@ from typing import List
 
 import numpy as np
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 _MODEL_PATH = os.path.join(
     os.path.dirname(__file__), "..", "ml", "mouth_mlp.onnx"
 )
 _sess = None  # ONNX session 懒加载
 
 
+def _missing_model_files() -> list[str]:
+    missing = []
+    if not os.path.exists(_MODEL_PATH):
+        missing.append(_MODEL_PATH)
+        return missing
+
+    data_path = f"{_MODEL_PATH}.data"
+    try:
+        with open(_MODEL_PATH, "rb") as model_file:
+            model_bytes = model_file.read()
+    except OSError:
+        return missing
+
+    if b".onnx.data" in model_bytes and not os.path.exists(data_path):
+        missing.append(data_path)
+    return missing
+
+
 def _get_session():
     global _sess
     if _sess is None:
+        missing = _missing_model_files()
+        if missing:
+            raise FileNotFoundError(
+                "ONNX mouth model is incomplete, missing external data file(s): "
+                + ", ".join(missing)
+            )
         import onnxruntime as ort
         _sess = ort.InferenceSession(
             _MODEL_PATH,
@@ -60,7 +88,7 @@ def analyze_mouth_shapes_ml(audio_bytes: bytes, target_fps=30) -> List[dict]:
     try:
         mel = _extract_mel(audio_bytes)
     except Exception as e:
-        print(f"[mouth_ml] mel extraction failed: {e}")
+        logger.warning("mouth ml mel extraction failed: %s", e)
         return []
 
     total_mel_frames = mel.shape[1]

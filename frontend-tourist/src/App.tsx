@@ -98,6 +98,9 @@ export default function App() {
         open={avatarOpen}
         onToggle={() => setAvatarOpen(v => !v)}
         selectedAvatar={selectedAvatar}
+        selectedAvatarId={selectedAvatarId}
+        avatarOptions={avatarList}
+        onAvatarChange={setSelectedAvatarId}
         onAvatarUpdate={handleAvatarUpdate}
       />
     </div>

@@ -15,12 +15,18 @@ TODO Tools 集成（如天气查询、地图导航等实用工具）
 """
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from langchain_core.messages import AIMessage, HumanMessage
 
+from app.core.config import settings
+from app.core.logging import brief_text, elapsed_ms, get_logger
 from app.agent.state import AgentState
 from app.agent.qwen_client import qwen_client
 from app.agent.rag_service import rag_service
+
+logger = get_logger(__name__)
 
 # 导游人设 System Prompt
 GUIDE_SYSTEM = """你是灵山胜境的AI数字人导游"小慧"，性格热情友善、知识渊博、善于沟通。
@@ -56,9 +62,21 @@ async def intent_classifier(state: AgentState) -> dict:
     """
     user_input = state["user_input"]
     has_image = bool(state.get("image_base64"))
+    start = time.perf_counter()
+    logger.info(
+        "node intent_classifier start session_id=%s has_image=%s input=%s",
+        state.get("session_id"),
+        has_image,
+        brief_text(user_input, 120),
+    )
 
     # 有图片直接路由到 image
     if has_image:
+        logger.info(
+            "node intent_classifier done session_id=%s intent=image duration_ms=%s",
+            state.get("session_id"),
+            elapsed_ms(start),
+        )
         return {
             "intent": "image",
             "agent_steps": [f"[意图识别] 检测到图片输入，路由至图像分析节点"],
@@ -82,9 +100,37 @@ async def intent_classifier(state: AgentState) -> dict:
         {"role": "user", "content": f"用户消息：{user_input}"},
     ]
 
-    result = await qwen_client.chat_json(prompt_messages, temperature=0.0, max_tokens=100)
+    try:
+        result = await qwen_client.chat_json(prompt_messages, temperature=0.0, max_tokens=100)
+    except Exception as e:
+        logger.exception(
+            "node intent_classifier failed session_id=%s duration_ms=%s",
+            state.get("session_id"),
+            elapsed_ms(start),
+        )
+        return {
+            "intent": "qa",
+            "agent_steps": [f"[意图识别] 模型调用失败，按 qa 处理: {str(e)[:120]}"],
+        }
+
     intent = result.get("intent", "qa")
     confidence = result.get("confidence", 0.8)
+    if intent not in {"qa", "route", "image", "emotion", "chitchat"}:
+        logger.warning(
+            "node intent_classifier invalid intent session_id=%s intent=%s result=%s",
+            state.get("session_id"),
+            intent,
+            result,
+        )
+        intent = "qa"
+
+    logger.info(
+        "node intent_classifier done session_id=%s intent=%s confidence=%s duration_ms=%s",
+        state.get("session_id"),
+        intent,
+        confidence,
+        elapsed_ms(start),
+    )
 
     return {
         "intent": intent,
@@ -98,14 +144,53 @@ async def rag_retriever(state: AgentState) -> dict:
     使用 Qwen Embedding 进行语义相似度检索
     """
     query = state["user_input"]
+    start = time.perf_counter()
+    logger.info(
+        "node rag_retriever start session_id=%s query=%s initialized=%s",
+        state.get("session_id"),
+        brief_text(query, 120),
+        rag_service._initialized,
+    )
     # 若有历史上下文，拼接最近一轮提升检索质量
     messages = state.get("messages", [])
     if messages:
         last_human = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
         if last_human and last_human.content != query:
             query = f"{last_human.content} {query}"
-    # TODO RAG 模块待完善
-    docs = await rag_service.search(query, top_k=4)
+    try:
+        docs = await asyncio.wait_for(
+            rag_service.search(query, top_k=4),
+            timeout=settings.RAG_SEARCH_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.exception(
+            "node rag_retriever timeout session_id=%s timeout_seconds=%s duration_ms=%s",
+            state.get("session_id"),
+            settings.RAG_SEARCH_TIMEOUT_SECONDS,
+            elapsed_ms(start),
+        )
+        return {
+            "retrieved_docs": [],
+            "agent_steps": [f"[RAG检索] 超过 {settings.RAG_SEARCH_TIMEOUT_SECONDS:.0f}s，已跳过知识检索"],
+        }
+    except Exception as e:
+        logger.exception(
+            "node rag_retriever failed session_id=%s duration_ms=%s",
+            state.get("session_id"),
+            elapsed_ms(start),
+        )
+        return {
+            "retrieved_docs": [],
+            "agent_steps": [f"[RAG检索] 调用失败，已跳过: {str(e)[:120]}"],
+        }
+
+    logger.info(
+        "node rag_retriever done session_id=%s docs=%s top_score=%s duration_ms=%s",
+        state.get("session_id"),
+        len(docs),
+        docs[0].get("score") if docs else None,
+        elapsed_ms(start),
+    )
 
     return {
         "retrieved_docs": docs,
@@ -127,9 +212,30 @@ async def image_analyzer(state: AgentState) -> dict:
     """
     image_b64 = state.get("image_base64", "")
     user_input = state.get("user_input", "请帮我介绍这张图片中的景点")
+    start = time.perf_counter()
+    logger.info(
+        "node image_analyzer start session_id=%s image_chars=%s input=%s",
+        state.get("session_id"),
+        len(image_b64 or ""),
+        brief_text(user_input, 120),
+    )
 
     # 先用 RAG 检索相关知识作为辅助上下文
-    rag_docs = await rag_service.search("灵山大佛 梵宫 佛像 景点建筑", top_k=3)
+    try:
+        rag_docs = await asyncio.wait_for(
+            rag_service.search("灵山大佛 梵宫 佛像 景点建筑", top_k=3),
+            timeout=settings.RAG_SEARCH_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        logger.exception(
+            "node image_analyzer rag failed session_id=%s duration_ms=%s",
+            state.get("session_id"),
+            elapsed_ms(start),
+        )
+        rag_docs = []
+        rag_error_step = f"[图像分析] 辅助 RAG 检索失败，继续调用视觉模型: {str(e)[:120]}"
+    else:
+        rag_error_step = None
     knowledge_hint = rag_service.format_context(rag_docs, max_chars=800)
 
     vl_prompt = (
@@ -155,14 +261,29 @@ async def image_analyzer(state: AgentState) -> dict:
             vl_reply = f"[happy] {vl_reply}"
             emotion = "happy"
         reply = re.sub(r"【(开心|好奇|温柔|专业|热情|惊喜)】\s*", "", vl_reply).strip()
+        logger.info(
+            "node image_analyzer done session_id=%s reply_chars=%s docs=%s emotion=%s duration_ms=%s",
+            state.get("session_id"),
+            len(reply),
+            len(rag_docs),
+            emotion,
+            elapsed_ms(start),
+        )
 
         return {
             "final_reply": reply,
             "avatar_emotion": emotion,
             "retrieved_docs": rag_docs,
-            "agent_steps": ["[图像分析] Qwen-VL 完成图像识别与景点解读"],
+            "agent_steps": ([rag_error_step] if rag_error_step else []) + [
+                "[图像分析] Qwen-VL 完成图像识别与景点解读"
+            ],
         }
     except Exception as e:
+        logger.exception(
+            "node image_analyzer failed session_id=%s duration_ms=%s",
+            state.get("session_id"),
+            elapsed_ms(start),
+        )
         error_msg = f"图片分析服务暂时不可用（{str(e)[:50]}），请用文字描述您想了解的景点，我来为您介绍～"
         return {
             "final_reply": error_msg,
@@ -176,6 +297,12 @@ async def image_analyzer(state: AgentState) -> dict:
 async def emotion_analyzer(state: AgentState) -> dict:
     """分析游客消息的情感倾向，用于数字人表情调整和管理后台报告"""
     user_input = state["user_input"]
+    start = time.perf_counter()
+    logger.info(
+        "node emotion_analyzer start session_id=%s input=%s",
+        state.get("session_id"),
+        brief_text(user_input, 120),
+    )
 
     prompt_messages = [
         {
@@ -189,10 +316,30 @@ async def emotion_analyzer(state: AgentState) -> dict:
         {"role": "user", "content": f"游客消息：{user_input}"},
     ]
 
-    result = await qwen_client.chat_json(prompt_messages, temperature=0.0, max_tokens=100)
+    try:
+        result = await qwen_client.chat_json(prompt_messages, temperature=0.0, max_tokens=100)
+    except Exception as e:
+        logger.exception(
+            "node emotion_analyzer failed session_id=%s duration_ms=%s",
+            state.get("session_id"),
+            elapsed_ms(start),
+        )
+        result = {"emotion": "neutral", "sentiment_score": 0.6, "intensity": "low"}
+        return {
+            "visitor_emotion": result,
+            "agent_steps": [f"[情感分析] 模型调用失败，使用中性情绪: {str(e)[:120]}"],
+        }
 
     if not result:
         result = {"emotion": "neutral", "sentiment_score": 0.6, "intensity": "low"}
+
+    logger.info(
+        "node emotion_analyzer done session_id=%s emotion=%s score=%s duration_ms=%s",
+        state.get("session_id"),
+        result.get("emotion"),
+        result.get("sentiment_score"),
+        elapsed_ms(start),
+    )
 
     return {
         "visitor_emotion": result,
@@ -216,6 +363,14 @@ async def response_generator(state: AgentState) -> dict:
     user_input = state["user_input"]
     retrieved_docs = state.get("retrieved_docs", [])
     avatar_config = state.get("avatar_config") or {}
+    start = time.perf_counter()
+    logger.info(
+        "node response_generator start session_id=%s intent=%s docs=%s input=%s",
+        state.get("session_id"),
+        intent,
+        len(retrieved_docs),
+        brief_text(user_input, 120),
+    )
 
     avatar_name = avatar_config.get("name", "小慧")
     personality = avatar_config.get("personality", "热情友善、知识渊博、善于沟通")
@@ -256,9 +411,25 @@ async def response_generator(state: AgentState) -> dict:
     messages.append({"role": "user", "content": user_input})
 
     try:
-        reply = await qwen_client.chat(messages, temperature=0.7, max_tokens=400)
+        stream_callback = state.get("stream_callback")
+        if stream_callback:
+            chunks = []
+            async for chunk in qwen_client.chat_stream(messages, temperature=0.7, max_tokens=400):
+                chunks.append(chunk)
+                await stream_callback(chunk)
+            reply = "".join(chunks).strip()
+        else:
+            reply = await qwen_client.chat(messages, temperature=0.7, max_tokens=400)
     except Exception as e:
+        logger.exception(
+            "node response_generator model failed session_id=%s duration_ms=%s",
+            state.get("session_id"),
+            elapsed_ms(start),
+        )
         reply = f"[gentle] 非常抱歉，我暂时遇到了一些技术问题 😊 您可以稍后再试，或者直接前往景区服务中心，工作人员会热情为您服务的！"
+        stream_callback = state.get("stream_callback")
+        if stream_callback:
+            await stream_callback(reply)
         return {
             "final_reply": reply,
             "avatar_emotion": "gentle",
@@ -274,6 +445,14 @@ async def response_generator(state: AgentState) -> dict:
         emotion = "happy"
 
     clean_reply = re.sub(r"【(开心|好奇|温柔|专业|热情|惊喜)】\s*", "", reply).strip()
+    logger.info(
+        "node response_generator done session_id=%s intent=%s reply_chars=%s emotion=%s duration_ms=%s",
+        state.get("session_id"),
+        intent,
+        len(clean_reply),
+        emotion,
+        elapsed_ms(start),
+    )
 
     return {
         "final_reply": clean_reply,
@@ -289,6 +468,11 @@ async def response_generator(state: AgentState) -> dict:
 # 6. 兜底处理节点 
 async def fallback_handler(state: AgentState) -> dict:
     """当 vLLM 服务不可用时的兜底响应"""
+    logger.warning(
+        "node fallback_handler used session_id=%s input=%s",
+        state.get("session_id"),
+        brief_text(state.get("user_input"), 120),
+    )
     return {
         "final_reply": (
             "您好！目前AI服务正在维护中，请稍候片刻。\n"

@@ -82,4 +82,4 @@ echo "   游客端: cd frontend-tourist && npm install && npm run dev  → http:
 echo "   管理端: cd frontend-admin  && npm install && npm run dev  → http://localhost:3001"
 echo -e "\n${YELLOW}按 Ctrl+C 停止服务${NC}\n"
 
-uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload
+uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload --reload-include '*.py' --reload-exclude 'ai_guide.db*' --reload-exclude 'chroma_db/*' --reload-exclude 'uploads/*'

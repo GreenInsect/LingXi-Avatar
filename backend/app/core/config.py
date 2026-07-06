@@ -3,20 +3,32 @@
   - Chat/Vision: DashScope API (qwen-plus / qwen-vl-plus)
   - Embedding: 本地 vLLM (Qwen3-Embedding-0.6B)
 """
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    model_config = {
+      "env_file": ".env",
+      "extra": "ignore"  
+    }
     # ── DashScope API（Chat + Vision）─
     DASHSCOPE_API_KEY: str = "sk-daf3711ed0dc47cdb216a01a73b32fae"
-    DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    DASHSCOPE_BASE_URL: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        validation_alias=AliasChoices("DASHSCOPE_BASE_URL", "VLLM_CHAT_BASE_URL"),
+    )
+    DASHSCOPE_VL_BASE_URL: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        validation_alias=AliasChoices("DASHSCOPE_VL_BASE_URL", "VLLM_VL_BASE_URL"),
+    )
     QWEN_MODEL: str = "qwen-plus"
     QWEN_VL_MODEL: str = "qwen-vl-plus"
 
     # ── 本地 Embedding 模型 ─
     VLLM_EMBED_BASE_URL: str = "http://localhost:8003"
     EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-0.6B"
-    EMBEDDING_MODEL_PATH: str = "/home/xls/.cache/modelscope/hub/models/Qwen/Qwen3-Embedding-0.6B"
+    EMBEDDING_MODEL_PATH: str = "/var/tmp/Qwen3-Embedding-0.6B"
 
     # ── 数据库 ─
     DATABASE_URL: str = "sqlite:///./ai_guide.db"
@@ -44,8 +56,21 @@ class Settings(BaseSettings):
     RAG_TOP_K: int = 4
     MAX_IMAGE_SIZE: int = 1024
 
-    class Config:
-        env_file = ".env"
+    # ── 调试/超时 ─
+    LOG_LEVEL: str = "INFO"
+    DASHSCOPE_CONNECT_TIMEOUT_SECONDS: float = 10.0
+    DASHSCOPE_READ_TIMEOUT_SECONDS: float = 45.0
+    CHAT_AGENT_TIMEOUT_SECONDS: float = 75.0
+    TTS_TIMEOUT_SECONDS: float = 25.0
+    MOUTH_ANALYSIS_TIMEOUT_SECONDS: float = 8.0
+    RAG_SEARCH_TIMEOUT_SECONDS: float = 8.0
+    SKIP_TTS_ON_AGENT_FALLBACK: bool = True
+    RAG_MAX_DOC_CHARS_FOR_CHAT: int = 20000
+    RAG_MAX_TOTAL_CHARS_FOR_CHAT: int = 200000
+    RAG_MAX_UPLOAD_FILE_BYTES_FOR_CHAT: int = 5 * 1024 * 1024
+    # 聊天请求里默认不首次加载本地向量模型，避免首问卡死/内存崩溃。
+    # 管理后台上传/更新知识库仍会初始化并重建索引。
+    RAG_INITIALIZE_ON_CHAT: bool = False
 
 
 settings = Settings()

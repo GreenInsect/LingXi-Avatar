@@ -44,6 +44,7 @@ class AgentState(TypedDict):
     location: Optional[str]
     interests: Optional[str]
     avatar_config: Optional[dict]
+    stream_callback: Optional[Any]
 
     #  调试/追踪信息 
     agent_steps: Annotated[list[str], operator.add]  # 记录每步操作，方便调试

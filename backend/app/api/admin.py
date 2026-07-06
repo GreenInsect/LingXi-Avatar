@@ -1,12 +1,11 @@
 """
 管理后台 API
 """
-import os, uuid
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+import os
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import Optional
-from datetime import datetime
 
 from app.models.database import get_db, AvatarConfig, KnowledgeDoc
 from app.agent.rag_service import rag_service
@@ -111,16 +110,38 @@ class KnowledgeCreate(BaseModel):
     content: str
 
 
+def _brief_content(content: str | None, limit: int = 200) -> str:
+    text = content or ""
+    return text[:limit] + "..." if len(text) > limit else text
+
+
 @router.get("/knowledge/list")
 async def list_knowledge(db: Session = Depends(get_db)):
     docs = db.query(KnowledgeDoc).filter(KnowledgeDoc.is_active == True).all()
-    builtin = rag_service.get_all_documents()
+    indexed_docs = rag_service.get_all_documents()
+    upload_only_docs = [d for d in indexed_docs if d.get("source") == "upload_file"]
     return {
-        "builtin_docs": builtin,
+        "builtin_docs": [
+            {
+                "id": d.get("id"),
+                "title": d.get("title", ""),
+                "category": d.get("category", "general"),
+                "content": _brief_content(d.get("content")),
+                "file_path": d.get("file_path", ""),
+                "source": d.get("source", "upload_file"),
+            }
+            for d in upload_only_docs
+        ],
         "custom_docs": [
-            {"id": d.id, "title": d.title, "category": d.category,
-             "content": d.content[:200] + "..." if len(d.content) > 200 else d.content,
-             "created_at": d.created_at.isoformat()}
+            {
+                "id": d.id,
+                "title": d.title,
+                "category": d.category,
+                "content": _brief_content(d.content),
+                "file_path": d.file_path,
+                "created_at": d.created_at.isoformat(),
+                "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+            }
             for d in docs
         ],
     }
@@ -128,30 +149,101 @@ async def list_knowledge(db: Session = Depends(get_db)):
 
 @router.post("/knowledge/add")
 async def add_knowledge(doc: KnowledgeCreate, db: Session = Depends(get_db)):
-    doc_id = f"custom_{uuid.uuid4().hex[:8]}"
-    db_doc = KnowledgeDoc(title=doc.title, category=doc.category, content=doc.content)
+    content = doc.content.strip()
+    if not doc.title.strip() or not content:
+        raise HTTPException(status_code=400, detail="标题和内容不能为空")
+
+    db_doc = KnowledgeDoc(
+        title=doc.title.strip(),
+        category=doc.category or "general",
+        content=content,
+    )
     db.add(db_doc)
     db.commit()
-    await rag_service.add_document(doc_id, doc.title, doc.category, doc.content)
-    return {"message": "知识文档添加成功", "doc_id": doc_id}
+    db.refresh(db_doc)
+
+    file_path = rag_service.write_text_document_file(db_doc.id, db_doc.title, content)
+    db_doc.file_path = file_path
+    db.commit()
+    db.refresh(db_doc)
+
+    await rag_service.add_document(db_doc.id, db_doc.title, db_doc.category, db_doc.content, db_doc.file_path)
+    return {"message": "知识文档添加成功", "doc_id": db_doc.id}
 
 
 @router.post("/knowledge/upload")
-async def upload_knowledge(file: UploadFile = File(...), category: str = "general", db: Session = Depends(get_db)):
-    if not file.filename.endswith((".txt", ".md")):
-        raise HTTPException(status_code=400, detail="仅支持txt和md格式")
-    content = (await file.read()).decode("utf-8")
-    doc_id = f"upload_{uuid.uuid4().hex[:8]}"
-    title = file.filename.replace(".txt", "").replace(".md", "")
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-    file_path = os.path.join(settings.UPLOAD_DIR, f"{doc_id}_{file.filename}")
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    db_doc = KnowledgeDoc(title=title, category=category, content=content, file_path=file_path)
+async def upload_knowledge(
+    file: UploadFile = File(...),
+    category: str = Form("general"),
+    db: Session = Depends(get_db),
+):
+    filename = file.filename or "knowledge.txt"
+    suffix = Path(filename).suffix.lower()
+    if suffix not in rag_service.SUPPORTED_FILE_SUFFIXES:
+        supported = ", ".join(sorted(rag_service.SUPPORTED_FILE_SUFFIXES))
+        raise HTTPException(status_code=400, detail=f"仅支持以下格式: {supported}")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="上传文件为空")
+
+    title = Path(filename).stem
+    db_doc = KnowledgeDoc(title=title, category=category or "general", content="")
     db.add(db_doc)
     db.commit()
-    await rag_service.add_document(doc_id, title, category, content)
-    return {"message": f"文档《{title}》上传成功，已加入知识库"}
+    db.refresh(db_doc)
+
+    os.makedirs(rag_service.upload_dir, exist_ok=True)
+    safe_name = rag_service.safe_filename(filename)
+    file_path = rag_service.upload_dir / f"db_{db_doc.id}_{safe_name}"
+    try:
+        file_path.write_bytes(data)
+        content = rag_service.extract_file_content(file_path).strip()
+        if not content:
+            raise ValueError("文件中未解析到可用文本")
+    except Exception as e:
+        db.delete(db_doc)
+        db.commit()
+        try:
+            file_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail=f"解析知识库文件失败: {e}")
+
+    db_doc.content = content
+    db_doc.file_path = str(file_path)
+    db.commit()
+    db.refresh(db_doc)
+
+    await rag_service.add_document(db_doc.id, db_doc.title, db_doc.category, db_doc.content, db_doc.file_path)
+    return {"message": f"文档《{title}》上传成功，已加入知识库", "doc_id": db_doc.id}
+
+
+@router.put("/knowledge/{doc_id}")
+async def update_knowledge(doc_id: int, payload: KnowledgeCreate, db: Session = Depends(get_db)):
+    doc = db.query(KnowledgeDoc).filter(KnowledgeDoc.id == doc_id).first()
+    if not doc or not doc.is_active:
+        raise HTTPException(status_code=404, detail="文档不存在")
+
+    content = payload.content.strip()
+    if not payload.title.strip() or not content:
+        raise HTTPException(status_code=400, detail="标题和内容不能为空")
+
+    doc.title = payload.title.strip()
+    doc.category = payload.category or "general"
+    doc.content = content
+
+    existing_path = rag_service._resolve_file_path(doc.file_path)
+    if existing_path and existing_path.suffix.lower() in rag_service.TEXT_FILE_SUFFIXES:
+        existing_path.write_text(content, encoding="utf-8")
+    elif not existing_path or not existing_path.exists():
+        doc.file_path = rag_service.write_text_document_file(doc.id, doc.title, content)
+
+    db.commit()
+    db.refresh(doc)
+
+    await rag_service.update_document(doc.id, doc.title, doc.category, doc.content, doc.file_path)
+    return {"message": "知识文档更新成功", "doc_id": doc.id}
 
 
 @router.delete("/knowledge/{doc_id}")
@@ -161,4 +253,6 @@ async def delete_knowledge(doc_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="文档不存在")
     doc.is_active = False
     db.commit()
+    await rag_service.delete_document(doc.id)
     return {"message": "文档已删除"}
+
