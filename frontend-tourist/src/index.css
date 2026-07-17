@@ -851,6 +851,10 @@ button {
 }
 
 @media (max-width: 1080px) {
+  :root {
+    --sidebar-w: min(340px, 86vw);
+  }
+
   .app-shell {
     height: auto;
     grid-template-columns: 1fr;
@@ -875,7 +879,10 @@ button {
   }
 
   .stage-shell {
-    min-height: 360px;
+    width: 260px;
+    height: 380px;
+    left: 10px;
+    bottom: 10px;
   }
 
   .transform-grid {
@@ -884,9 +891,27 @@ button {
 }
 
 @media (max-width: 640px) {
+  :root {
+    --nav-h: 56px;
+    --sidebar-w: min(320px, 88vw);
+  }
+
+  html {
+    font-size: 15px;
+  }
+
   .app-shell {
     gap: 14px;
     padding: 14px;
+  }
+
+  .stage-shell {
+    width: 250px;
+    height: 360px;
+    left: -44px;
+    bottom: -70px;
+    z-index: 4;
+    pointer-events: none;
   }
 
   .panel-header,

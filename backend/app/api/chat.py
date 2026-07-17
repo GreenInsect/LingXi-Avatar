@@ -43,6 +43,10 @@ class ChatRequest(BaseModel):
     with_audio: bool = True
     image_base64: Optional[str] = None   # base64 图片（前端直接传）
     image_mime_type: Optional[str] = "image/jpeg"
+    avatar_id: Optional[str] = None
+    avatar_name: Optional[str] = None
+    avatar_personality: Optional[str] = None
+    avatar_voice_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -64,10 +68,12 @@ async def stream_message(request: ChatRequest):
     """发送消息，使用 SSE 流式返回 LangGraph 智能体最终回复。"""
     session_id = request.session_id or str(uuid.uuid4())
     logger.info(
-        "chat stream start session_id=%s with_audio=%s has_image=%s message=%s",
+        "chat stream start session_id=%s with_audio=%s has_image=%s avatar_id=%s avatar_name=%s message=%s",
         session_id,
         request.with_audio,
         bool(request.image_base64),
+        request.avatar_id,
+        request.avatar_name,
         brief_text(request.message, 180),
     )
 
@@ -80,6 +86,7 @@ async def stream_message(request: ChatRequest):
         async def run_and_finalize():
             try:
                 history, avatar_dict, avatar_config_db = await _load_chat_context(session_id)
+                avatar_dict = _merge_request_avatar_config(request, avatar_dict)
                 result = await run_agent(
                     user_input=request.message,
                     session_id=session_id,
@@ -243,9 +250,35 @@ def _avatar_to_dict(avatar_config_db: AvatarConfig | None) -> dict | None:
         return None
     return {
         "name": avatar_config_db.name,
+        "avatar_type": avatar_config_db.avatar_type,
         "personality": avatar_config_db.personality,
         "voice_id": avatar_config_db.voice_id,
     }
+
+
+def _merge_request_avatar_config(request: ChatRequest, avatar_config: dict | None) -> dict | None:
+    request_avatar = {
+        "avatar_type": request.avatar_id,
+        "name": request.avatar_name,
+        "personality": request.avatar_personality,
+        "voice_id": request.avatar_voice_id,
+    }
+    clean_request_avatar = {
+        key: value for key, value in request_avatar.items()
+        if isinstance(value, str) and value.strip()
+    }
+    if not clean_request_avatar:
+        return avatar_config
+
+    merged = {**(avatar_config or {}), **clean_request_avatar}
+    logger.info(
+        "chat avatar override avatar_id=%s avatar_name=%s voice_id=%s has_personality=%s",
+        merged.get("avatar_type"),
+        merged.get("name"),
+        merged.get("voice_id"),
+        bool(merged.get("personality")),
+    )
+    return merged
 
 
 async def _build_audio_and_mouth_shapes(
@@ -274,7 +307,7 @@ async def _build_audio_and_mouth_shapes(
         logger.warning("chat tts skipped reason=empty_tts_text")
         return audio_base64, audio_duration, mouth_shapes
 
-    voice_id = avatar_config_db.voice_id if avatar_config_db else "Cherry"
+    voice_id = request.avatar_voice_id or (avatar_config_db.voice_id if avatar_config_db else "Cherry")
     tts_start = time.perf_counter()
     logger.info(
         "chat tts stage start voice_id=%s emotion=%s text_chars=%s text=%s",
@@ -382,12 +415,14 @@ async def send_message(request: ChatRequest, db: Session = Depends(get_db)):
     request_start = time.perf_counter()
     session_id = request.session_id or str(uuid.uuid4())
     logger.info(
-        "chat message start session_id=%s visitor_id=%s input_type=%s with_audio=%s has_image=%s location=%s interests=%s message=%s",
+        "chat message start session_id=%s visitor_id=%s input_type=%s with_audio=%s has_image=%s avatar_id=%s avatar_name=%s location=%s interests=%s message=%s",
         session_id,
         request.visitor_id,
         request.input_type,
         request.with_audio,
         bool(request.image_base64),
+        request.avatar_id,
+        request.avatar_name,
         brief_text(request.location, 80),
         brief_text(request.interests, 120),
         brief_text(request.message, 180),
@@ -409,12 +444,13 @@ async def send_message(request: ChatRequest, db: Session = Depends(get_db)):
         # 获取激活的数字人配置
         avatar_config_db = db.query(AvatarConfig).filter(AvatarConfig.is_active == True).first()
         avatar_dict = _avatar_to_dict(avatar_config_db)
+        avatar_dict = _merge_request_avatar_config(request, avatar_dict)
         logger.info(
             "chat db history load done session_id=%s history_count=%s avatar_active=%s voice_id=%s duration_ms=%s",
             session_id,
             len(history),
             bool(avatar_dict),
-            avatar_config_db.voice_id if avatar_config_db else None,
+            avatar_dict.get("voice_id") if avatar_dict else None,
             elapsed_ms(db_start),
         )
 

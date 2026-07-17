@@ -2,6 +2,7 @@
 管理后台 API
 """
 import os
+import time
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
@@ -12,8 +13,10 @@ from app.agent.rag_service import rag_service
 from app.agent.qwen_client import qwen_client
 from app.services.tts_service import get_available_voices
 from app.core.config import settings
+from app.core.logging import brief_text, elapsed_ms, get_logger
 
 router = APIRouter()
+logger = get_logger(__name__)
 
 
 # ── 系统健康检查 ───────────────────────────────────────────────
@@ -34,67 +37,232 @@ async def system_health():
 
 
 # ── 数字人配置 ─────────────────────────────────────────────────
+AVATAR_PRESETS = {
+    "lingxi": {
+        "name": "Lingxi",
+        "avatar_type": "lingxi",
+        "voice_id": "Cherry",
+        "personality": "温柔清晰、真诚可靠、文化感强，适合作为灵山胜境主数字导游，能够自然讲解景区文化、路线、门票和游览建议。",
+        "greeting": "您好！我是灵山胜境数字导游 Lingxi，很高兴为您服务！请问您想了解什么？",
+    },
+    "yumi": {
+        "name": "Yumi",
+        "avatar_type": "yumi",
+        "voice_id": "Cherry",
+        "personality": "温柔明亮、亲和可靠、表达丰富，适合担任默认景区数字导游，回答清晰自然，并能主动照顾游客情绪。",
+        "greeting": "您好！我是灵山胜境数字导游 Yumi，很高兴为您服务！请问您想了解什么？",
+    },
+    "strawberryBunny": {
+        "name": "草莓兔兔",
+        "avatar_type": "strawberryBunny",
+        "voice_id": "Cherry",
+        "personality": "甜美亲切、活泼可爱、语气柔和，适合亲子游客、轻松问答和温暖陪伴式讲解。",
+        "greeting": "您好！我是灵山胜境数字导游草莓兔兔，今天想带您甜甜地逛一逛景区～",
+    },
+    "bingtang": {
+        "name": "冰糖",
+        "avatar_type": "bingtang",
+        "voice_id": "Cherry",
+        "personality": "干练自信、表达利落、镜头感强，适合进行重点景点讲解、活动主持和高信息密度问答。",
+        "greeting": "您好！我是灵山胜境数字导游冰糖，接下来由我为您清晰介绍景区亮点。",
+    },
+    "ellen": {
+        "name": "Ellen",
+        "avatar_type": "ellen",
+        "voice_id": "Cherry",
+        "personality": "轻松俏皮、反应灵动、表达自然，适合年轻游客互动、趣味问答和轻快的景区介绍。",
+        "greeting": "您好！我是灵山胜境数字导游 Ellen，想了解景点、路线还是门票信息呢？",
+    },
+    "rabbitHole": {
+        "name": "Rabbit Hole",
+        "avatar_type": "rabbitHole",
+        "voice_id": "Cherry",
+        "personality": "活泼调皮、戏剧感强、反应夸张，适合趣味活动、互动演出和更有记忆点的游客交流。",
+        "greeting": "您好！我是 Rabbit Hole，今天带您用更有趣的方式认识灵山胜境！",
+    },
+    "fuxuan": {
+        "name": "Fu Xuan",
+        "avatar_type": "fuxuan",
+        "voice_id": "Cherry",
+        "personality": "沉稳理性、表达精准、节奏从容，适合文化历史讲解、路线规划和需要可信度的服务场景。",
+        "greeting": "您好！我是灵山胜境数字导游 Fu Xuan，我会为您准确介绍景区文化与游览建议。",
+    },
+    "huohuo": {
+        "name": "Huo Huo",
+        "avatar_type": "huohuo",
+        "voice_id": "Cherry",
+        "personality": "温柔谨慎、真诚耐心、语气柔和，适合解答游客困惑、安抚情绪和陪伴式景区导览。",
+        "greeting": "您好！我是灵山胜境数字导游 Huo Huo，我会耐心陪您了解景区信息。",
+    },
+}
+DEFAULT_AVATAR = AVATAR_PRESETS["lingxi"]
+LEGACY_AVATAR_TYPE_MAP = {
+    "guide_female": "lingxi",
+    "guide_male": "fuxuan",
+    "ancient": "fuxuan",
+    "modern": "bingtang",
+}
+
+
+def _avatar_payload(config: AvatarConfig) -> dict:
+    return {
+        "id": config.id,
+        "name": config.name,
+        "avatar_type": config.avatar_type,
+        "voice_id": config.voice_id,
+        "personality": config.personality,
+        "greeting": config.greeting,
+        "is_active": config.is_active,
+        "created_at": config.created_at.isoformat() if config.created_at else None,
+    }
+
+
+def _legacy_target_type(config: AvatarConfig) -> str | None:
+    name = (config.name or "").strip()
+    greeting = config.greeting or ""
+    if name == "小慧" or "小慧" in greeting:
+        return "lingxi"
+    return LEGACY_AVATAR_TYPE_MAP.get(config.avatar_type)
+
+
+def _apply_preset(config: AvatarConfig, preset_key: str) -> None:
+    preset = AVATAR_PRESETS[preset_key]
+    config.name = preset["name"]
+    config.avatar_type = preset["avatar_type"]
+    config.voice_id = config.voice_id or preset["voice_id"]
+    config.personality = preset["personality"]
+    config.greeting = preset["greeting"]
+
+
+def _model_dump(model: BaseModel) -> dict:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
+
+
+def _ensure_default_avatar(db: Session, avatars: list[AvatarConfig]) -> list[AvatarConfig]:
+    if not avatars:
+        default = AvatarConfig(**DEFAULT_AVATAR, is_active=True)
+        db.add(default)
+        db.commit()
+        db.refresh(default)
+        logger.info(
+            "admin avatar default created name=%s avatar_type=%s",
+            default.name,
+            default.avatar_type,
+        )
+        return [default]
+
+    migrated = False
+    for avatar in avatars:
+        target_type = _legacy_target_type(avatar)
+        if not target_type:
+            continue
+        logger.info(
+            "admin avatar migrate legacy id=%s old_name=%s old_type=%s target_type=%s",
+            avatar.id,
+            brief_text(avatar.name, 60),
+            avatar.avatar_type,
+            target_type,
+        )
+        _apply_preset(avatar, target_type)
+        migrated = True
+
+    if migrated and not any(a.is_active for a in avatars):
+        default_avatar = next((a for a in avatars if a.avatar_type == DEFAULT_AVATAR["avatar_type"]), avatars[0])
+        default_avatar.is_active = True
+        logger.info(
+            "admin avatar no active after migration, activate id=%s avatar_type=%s",
+            default_avatar.id,
+            default_avatar.avatar_type,
+        )
+
+    if migrated:
+        db.commit()
+        avatars = db.query(AvatarConfig).order_by(AvatarConfig.id.asc()).all()
+
+    return avatars
+
+
 class AvatarConfigCreate(BaseModel):
-    name: str
-    avatar_type: str = "guide_female"
+    name: str = DEFAULT_AVATAR["name"]
+    avatar_type: str = DEFAULT_AVATAR["avatar_type"]
     voice_id: str = "Cherry"
-    personality: str = "热情友善、知识渊博、善于沟通，具有亲和力"
-    greeting: str = "您好！我是灵山胜境AI导游小慧，很高兴为您服务！"
+    personality: str = DEFAULT_AVATAR["personality"]
+    greeting: str = DEFAULT_AVATAR["greeting"]
 
 
 @router.get("/avatar/list")
 async def list_avatars(db: Session = Depends(get_db)):
-    avatars = db.query(AvatarConfig).all()
-    if not avatars:
-        default = AvatarConfig(
-            name="小慧",
-            avatar_type="guide_female",
-            voice_id="Cherry",
-            personality="热情友善、知识渊博、善于沟通，说话亲切自然，擅长将景区故事娓娓道来",
-            greeting="您好！我是灵山胜境AI导游小慧 🌸，很高兴为您服务！请问您想了解什么？",
-            is_active=True,
-        )
-        db.add(default)
-        db.commit()
-        db.refresh(default)
-        avatars = [default]
-    return {"avatars": [
-        {"id": a.id, "name": a.name, "avatar_type": a.avatar_type,
-         "voice_id": a.voice_id, "personality": a.personality,
-         "greeting": a.greeting, "is_active": a.is_active,
-         "created_at": a.created_at.isoformat()}
-        for a in avatars
-    ]}
+    start = time.perf_counter()
+    avatars = db.query(AvatarConfig).order_by(AvatarConfig.id.asc()).all()
+    logger.info("admin avatar list start count=%s", len(avatars))
+    avatars = _ensure_default_avatar(db, avatars)
+    response = [_avatar_payload(a) for a in avatars]
+    logger.info(
+        "admin avatar list done count=%s active=%s duration_ms=%s",
+        len(response),
+        next((a["avatar_type"] for a in response if a["is_active"]), None),
+        elapsed_ms(start),
+    )
+    return {"avatars": response}
 
 
 @router.post("/avatar/create")
 async def create_avatar(config: AvatarConfigCreate, db: Session = Depends(get_db)):
-    avatar = AvatarConfig(**config.dict())
+    payload = _model_dump(config)
+    logger.info(
+        "admin avatar create start name=%s avatar_type=%s voice_id=%s greeting=%s",
+        payload["name"],
+        payload["avatar_type"],
+        payload["voice_id"],
+        brief_text(payload["greeting"], 80),
+    )
+    avatar = AvatarConfig(**payload)
     db.add(avatar)
     db.commit()
     db.refresh(avatar)
+    logger.info("admin avatar create done id=%s avatar_type=%s", avatar.id, avatar.avatar_type)
     return {"id": avatar.id, "message": "数字人配置创建成功"}
 
 
 @router.put("/avatar/{avatar_id}/activate")
 async def activate_avatar(avatar_id: int, db: Session = Depends(get_db)):
-    db.query(AvatarConfig).update({"is_active": False})
+    logger.info("admin avatar activate start id=%s", avatar_id)
     avatar = db.query(AvatarConfig).filter(AvatarConfig.id == avatar_id).first()
     if not avatar:
+        logger.warning("admin avatar activate missing id=%s", avatar_id)
         raise HTTPException(status_code=404, detail="配置不存在")
+    db.query(AvatarConfig).update({"is_active": False})
     avatar.is_active = True
     db.commit()
+    logger.info(
+        "admin avatar activate done id=%s name=%s avatar_type=%s",
+        avatar.id,
+        avatar.name,
+        avatar.avatar_type,
+    )
     return {"message": f"已激活数字人：{avatar.name}"}
 
 
 @router.put("/avatar/{avatar_id}")
 async def update_avatar(avatar_id: int, config: AvatarConfigCreate, db: Session = Depends(get_db)):
+    payload = _model_dump(config)
+    logger.info(
+        "admin avatar update start id=%s name=%s avatar_type=%s voice_id=%s",
+        avatar_id,
+        payload["name"],
+        payload["avatar_type"],
+        payload["voice_id"],
+    )
     avatar = db.query(AvatarConfig).filter(AvatarConfig.id == avatar_id).first()
     if not avatar:
+        logger.warning("admin avatar update missing id=%s", avatar_id)
         raise HTTPException(status_code=404, detail="配置不存在")
-    for k, v in config.dict().items():
+    for k, v in payload.items():
         setattr(avatar, k, v)
     db.commit()
+    logger.info("admin avatar update done id=%s avatar_type=%s", avatar.id, avatar.avatar_type)
     return {"message": "更新成功"}
 
 
@@ -255,4 +423,3 @@ async def delete_knowledge(doc_id: int, db: Session = Depends(get_db)):
     db.commit()
     await rag_service.delete_document(doc.id)
     return {"message": "文档已删除"}
-

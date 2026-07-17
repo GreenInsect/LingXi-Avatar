@@ -196,6 +196,7 @@ python-dotenv==1.2.2
 python-jose==3.3.0
 python-json-logger==4.1.0
 python-multipart==0.0.26
+pypinyin==0.53.0
 PyYAML==6.0.3
 pyzmq==27.1.0
 quack-kernels==0.3.10

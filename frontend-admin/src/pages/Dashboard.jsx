@@ -33,7 +33,8 @@ export default function Dashboard() {
       const d = await getDashboard()
       setData(d)
     } catch (e) {
-      setError('无法连接后端服务，请确认后端已启动（localhost:5000）')
+      console.error('[admin-dashboard] load failed', e)
+      setError(`无法连接后端服务，请确认后端和 Vite 代理配置正常。${e?.message || ''}`)
     } finally {
       setLoading(false)
     }

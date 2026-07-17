@@ -1,6 +1,7 @@
 .env
 node_modules/
 dist/
+dist-admin/
 build/
 *.log
 .vscode/

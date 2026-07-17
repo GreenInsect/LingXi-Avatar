@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, CSSProperties } from 'react'
 import { useChat } from '../hooks/useChat'
 import { useSpeechRecognition } from '../hooks/useVoiceRecord'
 import { useMouthAnimation } from '../hooks/useMouthAnimation'
+import { useResponsive } from '../hooks/useResponsive'
 import type { AvatarEmotion, ChatMessage, MouthShape } from '../types'
 import type { AvatarManifest, ExpressionLayer, ParameterOverride } from '../live2d/avatarManifest.ts'
 import {
@@ -32,8 +33,8 @@ function getMessageDisplayContent(msg: ChatMessage, guideName: string) {
   }
 
   return msg.content
-    .replace(/^您好！我是灵山胜境数字导游\s*[^。\n]+。/, `您好！我是灵山胜境数字导游 ${guideName}。`)
-    .replace(/^您好！我是灵山胜境AI导游小慧\s*🌸?/, `您好！我是灵山胜境数字导游 ${guideName}。`)
+    .replace(/^您好！我是灵山胜境数字导游\s*[^，。\n!?！？]+(?:[，。]\s*)?/, `您好！我是灵山胜境数字导游 ${guideName}。`)
+    .replace(/^您好！我是灵山胜境AI导游[^，。\n!?！？]*(?:[，。]\s*)?/, `您好！我是灵山胜境数字导游 ${guideName}。`)
 }
 
 // ── Message Bubble ────────────────────────────────────────────
@@ -134,6 +135,18 @@ function emotionToExpressionFallback(
   // 没有任何匹配 → 回到中性表情
   return { expressionMix: [{ key: neutralId, weight: 1 }], parameterOverrides: [] };
 }
+
+function buildAvatarPersonalityPrompt(avatar: AvatarManifest) {
+  const traits = avatar.persona?.traits?.join(', ') || 'friendly'
+  const rules = avatar.persona?.styleRules?.join(' ') || ''
+  return [
+    avatar.summary,
+    `tone: ${avatar.persona?.tone || 'warm and clear'}`,
+    `traits: ${traits}`,
+    rules,
+  ].filter(Boolean).join('\n')
+}
+
 interface FloatingAvatarProps {
   open: boolean; onToggle: () => void;
   selectedAvatar: AvatarManifest;
@@ -180,6 +193,7 @@ export default function FloatingAvatar({
 
   const { messages, loading, send, addMessage } = useChat({ sessionId, setSessionId })
   const { start: startMouth, stop: stopMouth } = useMouthAnimation();
+  const { isMobile } = useResponsive()
   const guideName = selectedAvatar.name?.trim() || selectedAvatar.id
 
   // 保持当前表情引用，嘴型动画回调中使用
@@ -232,7 +246,14 @@ export default function FloatingAvatar({
     setSpeaking(true)
     clearPlaybackTimer()
     try {
-      const res = await send({ text: msg, inputType, location: '灵山胜境景区内' })
+      const res = await send({
+        text: msg,
+        inputType,
+        location: '灵山胜境景区内',
+        avatarId: selectedAvatar.id,
+        avatarName: guideName,
+        avatarPersonality: buildAvatarPersonalityPrompt(selectedAvatar),
+      })
       const data = res as LingshanResponse | undefined;
       if (data?.avatar_emotion) setEmotion(data.avatar_emotion)
       if (!data) {
@@ -329,7 +350,7 @@ export default function FloatingAvatar({
       setSpeaking(false)
       /* send failed, already handled in useChat */
     }
-  }, [text, loading, send, selectedAvatar, onAvatarUpdate, startMouth, stopMouth, clearPlaybackTimer])
+  }, [text, loading, send, selectedAvatar, guideName, onAvatarUpdate, startMouth, stopMouth, clearPlaybackTimer])
 
   const { listening, supported, start, stop } = useSpeechRecognition({
     onResult: (t) => { setText(t); setTimeout(() => handleSend(t, 'voice'), 150) },
@@ -348,14 +369,17 @@ export default function FloatingAvatar({
   // ── Expanded panel ────────────────────────────────────────────
   return (
     <div style={{
-      position: 'fixed', right: 20, bottom: 20,
-      width: 'min(390px, calc(100vw - 32px))',
-      height: 'min(640px, calc(100vh - 40px))',
+      position: 'fixed',
+      right: isMobile ? 8 : 20,
+      bottom: isMobile ? 8 : 20,
+      left: isMobile ? 8 : 'auto',
+      width: isMobile ? 'auto' : 'min(390px, calc(100vw - 32px))',
+      height: isMobile ? 'min(640px, calc(100dvh - 16px))' : 'min(640px, calc(100vh - 40px))',
       zIndex: 500,
       display: 'flex', flexDirection: 'column',
       background: 'linear-gradient(180deg, rgba(255,252,245,0.98), rgba(247,238,222,0.97))',
       backdropFilter: 'blur(22px)',
-      borderRadius: 18,
+      borderRadius: isMobile ? 14 : 18,
       boxShadow: '0 24px 70px rgba(26,15,10,0.22), 0 8px 24px rgba(61,122,94,0.10)',
       border: '1px solid rgba(201,168,76,0.28)',
       overflow: 'hidden',
@@ -364,21 +388,21 @@ export default function FloatingAvatar({
     }}>
       {/* Header */}
       <div style={{
-        padding: '14px 15px 12px',
+        padding: isMobile ? '12px 12px 10px' : '14px 15px 12px',
         flexShrink: 0,
         background: 'linear-gradient(135deg, rgba(61,122,94,0.13), rgba(201,168,76,0.13))',
         borderBottom: '1px solid rgba(201,168,76,0.22)',
         display: 'grid',
         gap: 10,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 10 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 10, color: 'rgba(26,15,10,0.52)', letterSpacing: 0.8, fontWeight: 700 }}>
               灵山胜境数字导游
             </div>
             <div style={{
               marginTop: 2,
-              fontSize: 20,
+              fontSize: isMobile ? 18 : 20,
               fontWeight: 800,
               color: 'var(--ink)',
               lineHeight: 1.1,
@@ -395,7 +419,7 @@ export default function FloatingAvatar({
             aria-label="选择数字人"
             title="选择数字人"
             style={{
-              width: 122,
+              width: isMobile ? 108 : 122,
               height: 34,
               borderRadius: 10,
               border: '1px solid rgba(61,122,94,0.22)',
@@ -403,7 +427,7 @@ export default function FloatingAvatar({
               color: 'var(--ink)',
               outline: 'none',
               padding: '0 10px',
-              fontSize: 12,
+              fontSize: isMobile ? 11 : 12,
               fontWeight: 700,
               boxShadow: '0 4px 14px rgba(26,15,10,0.06)',
             }}
@@ -413,7 +437,7 @@ export default function FloatingAvatar({
             ))}
           </select>
           <button onClick={onToggle} title="关闭" style={{
-            width: 34, height: 34, borderRadius: 10,
+            width: isMobile ? 32 : 34, height: isMobile ? 32 : 34, borderRadius: 10,
             background: 'rgba(26,15,10,0.07)', color: 'var(--ink)',
             fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
             transition: 'all 0.18s', border: '1px solid rgba(26,15,10,0.04)', cursor: 'pointer',
@@ -471,7 +495,7 @@ export default function FloatingAvatar({
       <div style={{
         flex: 1,
         overflowY: 'auto',
-        padding: '16px 15px 14px',
+        padding: isMobile ? '13px 12px 12px' : '16px 15px 14px',
         display: 'flex',
         flexDirection: 'column',
         gap: 12,
@@ -485,7 +509,7 @@ export default function FloatingAvatar({
       {/* Quick questions */}
       {showQuick && messages.length <= 1 && (
         <div style={{
-          padding: '10px 12px 8px',
+          padding: isMobile ? '9px 10px 8px' : '10px 12px 8px',
           borderTop: '1px solid rgba(201,168,76,0.18)',
           display: 'flex',
           gap: 7,
@@ -526,7 +550,7 @@ export default function FloatingAvatar({
 
       {/* Input */}
       <div style={{
-        padding: '11px 13px 13px',
+        padding: isMobile ? '9px 10px 10px' : '11px 13px 13px',
         borderTop: '1px solid rgba(201,168,76,0.22)',
         background: 'linear-gradient(180deg, rgba(255,252,245,0.86), rgba(250,245,236,0.98))',
         flexShrink: 0,

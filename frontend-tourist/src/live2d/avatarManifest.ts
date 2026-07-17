@@ -63,6 +63,7 @@ export type AvatarManifest = {
     styleRules: string[];
   };
   modelJson: string;
+  mobileModelJson?: string;
   scaleMultiplier: number;
   verticalOffset: number;
   modelTransform: {
@@ -484,6 +485,7 @@ const strawberryFolder = publicAsset('live2D/\u8349\u8393\u5154\u51541');
 const strawberryTrialFolder = publicAsset('live2D/\u8349\u8393\u5154\u5154 \u8bd5\u7528');
 const fuxuanFolder = publicAsset('live2D/\u7b26\u7384');
 const huohuoFolder = publicAsset('live2D/\u85ff\u85ff');
+const lingxiFolder = publicAsset('live2D/lingxi');
 
 const strawberryBunnyFullManifest = baseAvatar({
   id: 'strawberryBunny',
@@ -536,6 +538,24 @@ avatarResolvers.set('strawberryBunny', async () => (
 ));
 
 export const avatars: Record<string, AvatarManifest> = {
+  lingxi: baseAvatar({
+    id: 'lingxi',
+    name: 'Lingxi',
+    summary: 'Custom Lingxi digital guide model for the scenic guide experience.',
+    persona: {
+      tone: 'warm, clear, sincere, and culturally aware',
+      traits: ['gentle', 'reliable', 'bright', 'patient'],
+      styleRules: [
+        'Speak warmly and clearly as the primary scenic guide.',
+        'Keep answers practical, accurate, and easy to follow.',
+        'Use a calm and friendly tone when visitors ask for help.',
+      ],
+    },
+    modelJson: `${lingxiFolder}/lingxi.model3.json`,
+    scaleMultiplier: 0.28,
+    verticalOffset: 0.08,
+    modelTransform: createModelTransform(1, 0, 0),
+  }),
   yumi: baseAvatar({
     id: 'yumi',
     name: 'Yumi',
@@ -550,6 +570,7 @@ export const avatars: Record<string, AvatarManifest> = {
       ],
     },
     modelJson: publicAsset('live2D/yumi/yumi.model3.json'),
+    mobileModelJson: publicAsset('live2D/yumi/yumi.mobile.model3.json'),
     scaleMultiplier: 0.27,
     verticalOffset: 0.08,
     modelTransform: createModelTransform(1, 0, 0),
@@ -700,7 +721,7 @@ export const avatars: Record<string, AvatarManifest> = {
   }),
 };
 
-export const featuredAvatarIds = ['yumi', 'strawberryBunny', 'bingtang', 'ellen'] as const;
+export const featuredAvatarIds = ['lingxi', 'yumi', 'strawberryBunny', 'bingtang', 'ellen'] as const;
 export const avatarList = [
   ...featuredAvatarIds.map((avatarId) => avatars[avatarId]),
   ...Object.values(avatars).filter((avatar) => !featuredAvatarIds.includes(avatar.id as never)),

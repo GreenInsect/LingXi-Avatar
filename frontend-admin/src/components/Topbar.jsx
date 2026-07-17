@@ -10,6 +10,9 @@ const PAGE_TITLES = {
 
 export default function Topbar({ activePage }) {
   const [time, setTime] = useState('')
+  const apiBase = import.meta.env.VITE_ADMIN_API_BASE || '/api'
+  const backendTarget = import.meta.env.VITE_ADMIN_BACKEND_URL || 'Vite proxy target'
+  const mode = import.meta.env.MODE
 
   useEffect(() => {
     const update = () => setTime(new Date().toLocaleString('zh-CN', {
@@ -38,6 +41,23 @@ export default function Topbar({ activePage }) {
       </h1>
 
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div
+          title={`mode=${mode} apiBase=${apiBase} backend=${backendTarget}`}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '4px 10px', borderRadius: 20,
+            background: 'rgba(79,142,247,0.08)',
+            border: '1px solid rgba(79,142,247,0.18)',
+            fontSize: 11, color: 'var(--accent)',
+            maxWidth: 320,
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          Debug · {mode} · {apiBase}
+        </div>
+
         {/* Live badge */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 6,

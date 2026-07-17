@@ -1,4 +1,5 @@
 import type { PageId } from '../types'
+import { useResponsive } from '../hooks/useResponsive'
 
 interface NavItem { id: PageId; label: string }
 
@@ -20,17 +21,19 @@ interface NavbarProps {
 }
 
 export default function Navbar({ activePage, onNavigate, onMenuToggle, sidebarOpen }: NavbarProps) {
+  const { isMobile, isTablet } = useResponsive()
+
   return (
     <header style={{
       height: 'var(--nav-h)', background: 'rgba(250,245,236,0.96)',
       backdropFilter: 'blur(16px)', borderBottom: '1px solid var(--border)',
-      display: 'flex', alignItems: 'center', padding: '0 24px', gap: 0,
+      display: 'flex', alignItems: 'center', padding: isMobile ? '0 12px' : '0 24px', gap: 0,
       position: 'relative', zIndex: 200, boxShadow: '0 1px 16px rgba(26,15,10,0.06)',
       flexShrink: 0,
     }}>
       {/* Hamburger */}
       <button onClick={onMenuToggle} style={{
-        width: 40, height: 40, borderRadius: 8, marginRight: 12,
+        width: isMobile ? 38 : 40, height: isMobile ? 38 : 40, borderRadius: 8, marginRight: isMobile ? 8 : 12,
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 5,
         background: sidebarOpen ? 'var(--gold-pale)' : 'transparent', transition: 'all 0.2s',
         border: 'none', cursor: 'pointer',
@@ -49,21 +52,28 @@ export default function Navbar({ activePage, onNavigate, onMenuToggle, sidebarOp
       </button>
 
       {/* Logo */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginRight: 32 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 10, marginRight: isMobile ? 10 : 32, minWidth: 0 }}>
         <div style={{
-          width: 38, height: 38, borderRadius: '50%',
+          width: isMobile ? 34 : 38, height: isMobile ? 34 : 38, borderRadius: '50%',
           background: 'linear-gradient(135deg, var(--gold), #a07830)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 20, boxShadow: '0 2px 8px rgba(201,168,76,0.4)',
+          fontSize: isMobile ? 17 : 20, boxShadow: '0 2px 8px rgba(201,168,76,0.4)',
         }}>🏔️</div>
-        <div>
-          <div style={{ fontFamily: "'Ma Shan Zheng',cursive", fontSize: 18, letterSpacing: 2, color: 'var(--ink)', lineHeight: 1 }}>灵山胜境</div>
-          <div style={{ fontSize: 9, color: 'var(--jade)', letterSpacing: 1.5, textTransform: 'uppercase' }}>Lingshan Scenic Area</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontFamily: "'Ma Shan Zheng',cursive", fontSize: isMobile ? 16 : 18, letterSpacing: isMobile ? 1 : 2, color: 'var(--ink)', lineHeight: 1 }}>灵山胜境</div>
+          {!isMobile && <div style={{ fontSize: 9, color: 'var(--jade)', letterSpacing: 1.5, textTransform: 'uppercase' }}>Lingshan Scenic Area</div>}
         </div>
       </div>
 
       {/* Nav links */}
-      <nav style={{ display: 'flex', gap: 4, flex: 1 }}>
+      <nav style={{
+        display: isMobile ? 'none' : 'flex',
+        gap: 4,
+        flex: 1,
+        overflowX: 'auto',
+        scrollbarWidth: 'none',
+        whiteSpace: 'nowrap',
+      }}>
         {NAV_ITEMS.map(item => (
           <button key={item.id} onClick={() => onNavigate(item.id)} style={{
             padding: '6px 14px', borderRadius: 20, fontSize: 13, cursor: 'pointer',
@@ -83,7 +93,7 @@ export default function Navbar({ activePage, onNavigate, onMenuToggle, sidebarOp
 
       {/* Badge */}
       <div style={{
-        display: 'flex', alignItems: 'center', gap: 6,
+        display: isMobile || isTablet ? 'none' : 'flex', alignItems: 'center', gap: 6,
         padding: '5px 12px', borderRadius: 20,
         background: 'rgba(61,122,94,0.08)', border: '1px solid rgba(61,122,94,0.2)',
         fontSize: 11, color: 'var(--jade)', marginLeft: 'auto',

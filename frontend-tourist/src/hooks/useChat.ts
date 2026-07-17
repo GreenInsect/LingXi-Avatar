@@ -13,6 +13,10 @@ interface SendParams {
   inputType?: 'text' | 'voice'
   location?: string | null
   interests?: string[]
+  avatarId?: string
+  avatarName?: string
+  avatarPersonality?: string
+  avatarVoiceId?: string
 }
 
 interface UseChatReturn {
@@ -138,7 +142,16 @@ export function useChat({ sessionId, setSessionId }: UseChatParams): UseChatRetu
   }, [stopTextReveal])
 
   const send = useCallback(
-    async ({ text, inputType = 'text', location, interests }: SendParams) => {
+    async ({
+      text,
+      inputType = 'text',
+      location,
+      interests,
+      avatarId,
+      avatarName,
+      avatarPersonality,
+      avatarVoiceId,
+    }: SendParams) => {
       if (!text.trim() || loading) return
 
       let sid = sessionId
@@ -157,6 +170,8 @@ export function useChat({ sessionId, setSessionId }: UseChatParams): UseChatRetu
         textChars: text.length,
         location,
         interests,
+        avatarId,
+        avatarName,
       })
 
       let assistantMessageId: number | null = null
@@ -175,6 +190,10 @@ export function useChat({ sessionId, setSessionId }: UseChatParams): UseChatRetu
           inputType,
           location,
           interests,
+          avatarId,
+          avatarName,
+          avatarPersonality,
+          avatarVoiceId,
           withAudio: true,
         }, {
           onToken: token => {

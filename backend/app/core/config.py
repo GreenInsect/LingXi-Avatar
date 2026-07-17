@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     TTS_MODEL: str = "qwen3-tts-flash"
 
     # ── 数字人 ─
-    DEFAULT_AVATAR: str = "guide_female"
+    DEFAULT_AVATAR: str = "lingxi"
 
     # ── 上传目录 ─
     UPLOAD_DIR: str = "./uploads"

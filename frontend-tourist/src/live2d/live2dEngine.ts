@@ -320,19 +320,44 @@ export async function createLive2DRuntime(
   }
 
   window.PIXI = PIXI;
+  const resolution = Math.min(window.devicePixelRatio || 1, 2);
 
   const app = new PIXI.Application({
     autoStart: true,
     resizeTo: container,
     backgroundAlpha: 0,
+    autoDensity: true,
     antialias: true,
+    resolution,
+    powerPreference: 'low-power',
+  } as PIXI.IApplicationOptions);
+
+  const canvas = app.view as HTMLCanvasElement;
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+  canvas.style.display = 'block';
+  canvas.addEventListener('webglcontextlost', (event) => {
+    event.preventDefault();
+    console.warn('[live2d] webgl context lost', { avatarId: avatar.id, modelJson: avatar.modelJson });
+  });
+  canvas.addEventListener('webglcontextrestored', () => {
+    console.info('[live2d] webgl context restored', { avatarId: avatar.id, modelJson: avatar.modelJson });
   });
 
-  container.replaceChildren(app.view as HTMLCanvasElement);
+  container.replaceChildren(canvas);
 
   const rawSettings = await fetchJson<Record<string, unknown>>(avatar.modelJson);
   const settings = createAugmentedSettings(rawSettings, avatar);
-  document.getElementById('live2d-container')?.appendChild(app.view);
+  console.info('[live2d] runtime loading', {
+    avatarId: avatar.id,
+    modelJson: avatar.modelJson,
+    resolution,
+    rendererType: app.renderer.type,
+    size: {
+      width: container.clientWidth,
+      height: container.clientHeight,
+    },
+  });
   const model = await Live2DModel.from(settings, {
     autoInteract: false,
   });
@@ -395,6 +420,15 @@ export async function createLive2DRuntime(
 
   fitModel(runtime, container);
   getFocusController(runtime).focus(0, 0, true);
+  console.info('[live2d] runtime ready', {
+    avatarId: avatar.id,
+    modelBaseWidth,
+    modelBaseHeight,
+    canvas: {
+      width: canvas.width,
+      height: canvas.height,
+    },
+  });
   return runtime;
 }
 

@@ -34,6 +34,10 @@ function buildMessagePayload(params: SendMessageParams) {
     with_audio: params.withAudio ?? true,
     image_base64: params.imageBase64 ?? null,
     image_mime_type: params.imageMimeType ?? 'image/jpeg',
+    avatar_id: params.avatarId ?? null,
+    avatar_name: params.avatarName ?? null,
+    avatar_personality: params.avatarPersonality ?? null,
+    avatar_voice_id: params.avatarVoiceId ?? null,
   }
 }
 
@@ -93,6 +97,8 @@ export async function sendMessage(params: SendMessageParams): Promise<ChatApiRes
     inputType: payload.input_type,
     withAudio: payload.with_audio,
     hasImage: Boolean(payload.image_base64),
+    avatarId: payload.avatar_id,
+    avatarName: payload.avatar_name,
     messageChars: payload.message.length,
   })
 
@@ -149,6 +155,8 @@ export async function sendMessageStream(
     inputType: payload.input_type,
     withAudio: payload.with_audio,
     hasImage: Boolean(payload.image_base64),
+    avatarId: payload.avatar_id,
+    avatarName: payload.avatar_name,
     messageChars: payload.message.length,
   })
 

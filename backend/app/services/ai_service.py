@@ -81,7 +81,7 @@ async def get_ai_response(
 ) -> dict:
     knowledge_context = await knowledge_service.search(message, top_k=3)
 
-    avatar_name = (avatar_config or {}).get("name", "小慧")
+    avatar_name = (avatar_config or {}).get("name", "Lingxi")
     personality  = (avatar_config or {}).get("personality", "热情友善、知识渊博、善于沟通")
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         avatar_name=avatar_name,
@@ -145,7 +145,7 @@ async def stream_ai_response(
     avatar_config: Optional[dict] = None,
 ) -> AsyncGenerator[str, None]:
     knowledge_context = await knowledge_service.search(message, top_k=3)
-    avatar_name = (avatar_config or {}).get("name", "小慧")
+    avatar_name = (avatar_config or {}).get("name", "Lingxi")
     personality  = (avatar_config or {}).get("personality", "热情友善、知识渊博")
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         avatar_name=avatar_name,

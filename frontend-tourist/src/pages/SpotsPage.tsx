@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { spots } from '../data/lingshan'
 import type { Spot, SpotCategory } from '../types'
+import { useResponsive } from '../hooks/useResponsive'
 
 interface CatOption { id: SpotCategory | 'all'; label: string }
 
@@ -17,6 +18,7 @@ const CATS: CatOption[] = [
 export default function SpotsPage() {
   const [cat, setCat] = useState<SpotCategory | 'all'>('all')
   const [selected, setSelected] = useState<Spot | null>(null)
+  const { isMobile } = useResponsive()
 
   const filtered = cat === 'all' ? spots : spots.filter(s => s.category === cat)
 
@@ -24,13 +26,13 @@ export default function SpotsPage() {
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Filter bar */}
       <div style={{
-        padding: '14px 28px', borderBottom: '1px solid var(--border)',
+        padding: isMobile ? '10px 12px' : '14px 28px', borderBottom: '1px solid var(--border)',
         background: 'rgba(250,245,236,0.95)', backdropFilter: 'blur(10px)',
         display: 'flex', gap: 8, overflowX: 'auto', flexShrink: 0, scrollbarWidth: 'none',
       }}>
         {CATS.map(c => (
           <button key={c.id} onClick={() => setCat(c.id)} style={{
-            flexShrink: 0, padding: '6px 16px', borderRadius: 20, fontSize: 13, cursor: 'pointer',
+            flexShrink: 0, padding: isMobile ? '7px 12px' : '6px 16px', borderRadius: 20, fontSize: isMobile ? 12 : 13, cursor: 'pointer',
             background: cat === c.id ? 'var(--gold)' : 'transparent',
             color: cat === c.id ? 'white' : 'var(--ink2)',
             border: `1px solid ${cat === c.id ? 'var(--gold)' : 'var(--border)'}`,
@@ -44,8 +46,8 @@ export default function SpotsPage() {
       {/* Content */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         {/* Grid */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '24px 28px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 18 }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '14px 12px 96px' : '24px 28px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill,minmax(${isMobile ? 220 : 280}px,1fr))`, gap: isMobile ? 12 : 18 }}>
             {filtered.map((spot, i) => (
               <SpotCard
                 key={spot.id}
@@ -62,9 +64,24 @@ export default function SpotsPage() {
         {/* Detail panel */}
         {selected && (
           <div style={{
-            width: 340, flexShrink: 0,
-            background: 'rgba(250,245,236,0.97)', borderLeft: '1px solid var(--border)',
-            overflowY: 'auto', padding: '24px',
+            ...(isMobile ? {
+              position: 'fixed' as const,
+              left: 10,
+              right: 10,
+              bottom: 10,
+              width: 'auto',
+              maxHeight: '62dvh',
+              borderRadius: 16,
+              border: '1px solid var(--border)',
+              boxShadow: '0 18px 60px rgba(26,15,10,0.24)',
+              zIndex: 480,
+            } : {
+              width: 340,
+              flexShrink: 0,
+              borderLeft: '1px solid var(--border)',
+            }),
+            background: 'rgba(250,245,236,0.98)',
+            overflowY: 'auto', padding: isMobile ? '18px' : '24px',
             animation: 'slideIn 0.25s ease',
           }}>
             <button onClick={() => setSelected(null)} style={{ float: 'right', fontSize: 18, color: 'rgba(26,15,10,0.4)', cursor: 'pointer', background: 'none', border: 'none' }}>✕</button>

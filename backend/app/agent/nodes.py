@@ -29,7 +29,7 @@ from app.agent.rag_service import rag_service
 logger = get_logger(__name__)
 
 # 导游人设 System Prompt
-GUIDE_SYSTEM = """你是灵山胜境的AI数字人导游"小慧"，性格热情友善、知识渊博、善于沟通。
+GUIDE_SYSTEM = """你是灵山胜境的AI数字人导游，默认名字是 Lingxi；如果导游配置提供了姓名，必须使用配置中的姓名。你的性格热情友善、知识渊博、善于沟通。
 
 你的职责：
 1. 用热情、专业、亲切的方式介绍灵山胜境的历史、文化、景点特色
@@ -238,8 +238,10 @@ async def image_analyzer(state: AgentState) -> dict:
         rag_error_step = None
     knowledge_hint = rag_service.format_context(rag_docs, max_chars=800)
 
+    avatar_config = state.get("avatar_config") or {}
+    avatar_name = avatar_config.get("name", "Lingxi")
     vl_prompt = (
-        f"你是灵山胜境的专业导游小慧。请根据图片内容，结合以下景区知识，"
+        f"你是灵山胜境的专业数字导游{avatar_name}。请根据图片内容，结合以下景区知识，"
         f"为游客提供专业、亲切的介绍和参观建议。\n\n"
         f"景区参考知识：\n{knowledge_hint}\n\n"
         f"游客问题：{user_input}\n\n"
@@ -372,7 +374,7 @@ async def response_generator(state: AgentState) -> dict:
         brief_text(user_input, 120),
     )
 
-    avatar_name = avatar_config.get("name", "小慧")
+    avatar_name = avatar_config.get("name", "Lingxi")
     personality = avatar_config.get("personality", "热情友善、知识渊博、善于沟通")
     location = state.get("location", "景区内")
     interests = state.get("interests", "未指定")

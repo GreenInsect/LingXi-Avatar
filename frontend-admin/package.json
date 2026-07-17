@@ -4,9 +4,10 @@
   "description": "AI数字人导游 - 管理后台",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 3001",
+    "dev": "vite --host 0.0.0.0 --port 4000 --strictPort",
+    "dev:debug": "DEBUG=vite:* vite --host 0.0.0.0 --port 4000 --strictPort --debug",
     "build": "vite build --outDir dist-admin",
-    "preview": "vite preview --port 3001"
+    "preview": "vite preview --host 0.0.0.0 --port 4000 --strictPort"
   },
   "dependencies": {
     "i": "^0.3.7",

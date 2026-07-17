@@ -29,6 +29,7 @@ type DragState = {
   startY: number;
   origin: StageTransform;
   mode: 'move' | 'scale';
+  moved: boolean;
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -162,6 +163,7 @@ export function Live2DStage({
       startY: event.clientY,
       origin: transformRef.current,
       mode: event.shiftKey ? 'scale' : 'move',
+      moved: false,
     };
 
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -186,6 +188,9 @@ export function Live2DStage({
 
     const deltaX = event.clientX - dragState.startX;
     const deltaY = event.clientY - dragState.startY;
+    if (Math.hypot(deltaX, deltaY) > 8) {
+      dragState.moved = true;
+    }
 
     if (dragState.mode === 'scale') {
       const nextScale = clamp(dragState.origin.scale - deltaY / 90, 0.05, 8);
@@ -208,13 +213,19 @@ export function Live2DStage({
   }
 
   function handlePointerUp(event: ReactPointerEvent<HTMLDivElement>) {
-    if (dragStateRef.current?.pointerId !== event.pointerId) {
+    const dragState = dragStateRef.current;
+    if (dragState?.pointerId !== event.pointerId) {
       return;
     }
 
     dragStateRef.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
     setStatus('Ready');
+    if (!dragState.moved) {
+      onClick?.();
+    }
   }
 
   function handlePointerLeave() {
@@ -242,8 +253,7 @@ export function Live2DStage({
   return (
     <div
       className="stage-shell"
-      style={onClick ? { cursor: 'pointer' } : undefined}
-      onClick={onClick}
+      style={onClick ? { cursor: 'pointer', touchAction: 'none' } : { touchAction: 'none' }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

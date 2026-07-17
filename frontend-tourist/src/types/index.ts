@@ -53,6 +53,10 @@ export interface SendMessageParams {
   withAudio?: boolean
   imageBase64?: string | null
   imageMimeType?: string
+  avatarId?: string
+  avatarName?: string
+  avatarPersonality?: string
+  avatarVoiceId?: string
 }
 
 // ── Data models ───────────────────────────────────────────────

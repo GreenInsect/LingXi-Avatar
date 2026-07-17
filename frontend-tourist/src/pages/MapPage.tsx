@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { spots, routes, scenicInfo } from '../data/lingshan'
 import type { Spot, Route } from '../types'
+import { useResponsive } from '../hooks/useResponsive'
 
 // ================================================================
 // 高德地图 API Key — 在此处替换为你的 Key
@@ -28,6 +29,7 @@ const CAT_LABELS: Record<string, string> = {
 
 export default function MapPage() {
   const containerRef = useRef<HTMLDivElement>(null)
+  const { isMobile } = useResponsive()
   const [map, setMap] = useState<any>(null)
   const [selectedSpot, setSelectedSpot] = useState<Spot | null>(null)
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null)
@@ -183,15 +185,19 @@ export default function MapPage() {
   }
 
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', height: '100%', overflow: 'hidden' }}>
       {/* sidebar */}
       <div style={{
-        width: 320, background: 'rgba(250,245,236,0.96)',
-        borderRight: '1px solid var(--border)',
+        width: isMobile ? '100%' : 320,
+        height: isMobile ? '42dvh' : 'auto',
+        minHeight: isMobile ? 270 : 'auto',
+        background: 'rgba(250,245,236,0.96)',
+        borderRight: isMobile ? 'none' : '1px solid var(--border)',
+        borderBottom: isMobile ? '1px solid var(--border)' : 'none',
         display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0,
       }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', position: 'relative' }}>
-          <h2 style={{ fontSize: 18, fontWeight: 600, color: 'var(--ink)', margin: 0 }}>
+        <div style={{ padding: isMobile ? '12px 14px' : '16px 20px', borderBottom: '1px solid var(--border)', position: 'relative' }}>
+          <h2 style={{ fontSize: isMobile ? 16 : 18, fontWeight: 600, color: 'var(--ink)', margin: 0 }}>
             🗺️ 景区导航地图
           </h2>
           <p style={{ fontSize: 11, color: 'var(--ink2)', margin: '4px 0 8px' }}>
@@ -213,7 +219,7 @@ export default function MapPage() {
           />
           {searchTips.length > 0 && (
             <div style={{
-              position: 'absolute', left: 20, right: 20, top: '100%',
+              position: 'absolute', left: isMobile ? 14 : 20, right: isMobile ? 14 : 20, top: '100%',
               background: 'white', borderRadius: 8, zIndex: 10,
               boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
               maxHeight: 200, overflowY: 'auto',
@@ -235,7 +241,7 @@ export default function MapPage() {
           )}
         </div>
 
-        <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)' }}>
+        <div style={{ padding: isMobile ? '10px 14px' : '12px 20px', borderBottom: '1px solid var(--border)' }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', marginBottom: 8 }}>
             📍 推荐游览路线
           </div>
@@ -257,7 +263,7 @@ export default function MapPage() {
           ))}
         </div>
 
-        <div style={{ padding: '12px 20px', flex: 1, overflowY: 'auto' }}>
+        <div style={{ padding: isMobile ? '10px 14px' : '12px 20px', flex: 1, overflowY: 'auto' }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', marginBottom: 8 }}>
             📌 景区景点（{spots.filter(s => s.coords).length}）
           </div>
@@ -301,11 +307,11 @@ export default function MapPage() {
       </div>
 
       {/* map */}
-      <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, minHeight: isMobile ? 'calc(58dvh - var(--nav-h))' : 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
         <div ref={containerRef} style={{ flex: 1 }} />
         <button onClick={locateUser} title="定位当前位置"
           style={{
-            position: 'absolute', right: 16, bottom: 32,
+            position: 'absolute', right: isMobile ? 12 : 16, bottom: isMobile ? 20 : 32,
             width: 36, height: 36, borderRadius: '50%',
             border: 'none', background: 'white',
             boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
@@ -320,7 +326,7 @@ export default function MapPage() {
           display: 'none',
         }} />
         <div style={{
-          position: 'absolute', left: 12, top: 12,
+          position: 'absolute', left: isMobile ? 8 : 12, right: isMobile ? 8 : 'auto', top: 12,
           background: 'rgba(255,255,255,0.92)', borderRadius: 8,
           padding: '6px 10px', fontSize: 10,
           boxShadow: '0 2px 8px rgba(0,0,0,0.08)',

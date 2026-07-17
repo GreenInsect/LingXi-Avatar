@@ -77,6 +77,25 @@ uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload
 - **游客端**：`cd frontend-tourist && npm run dev`
 - **管理端**：`cd frontend-admin && npm run dev`
 
+### 5. 新增 Live2D 数字人
+
+以 `lingxi` 为例，模型文件放在：
+
+```text
+frontend-tourist/public/live2D/lingxi/
+├── lingxi.model3.json
+├── lingxi.moc3
+├── lingxi.cdi3.json
+└── lingxi.2048/texture_00.png
+```
+
+接入时需要同步四处：
+
+1. 在 `frontend-tourist/src/live2d/avatarManifest.ts` 中新增 `avatars.lingxi`，并加入 `featuredAvatarIds`。
+2. 在 `frontend-admin/src/pages/Avatar.jsx` 中新增管理端预设，便于后台保存和激活。
+3. 在 `backend/app/api/admin.py` 中新增后端预设，保证接口默认配置和日志一致。
+4. 游客端聊天请求会携带当前选中的 `avatar_id/avatar_name/avatar_personality`，后端会优先使用本次请求的数字人配置。
+
 ------
 
 ## 🎯 核心功能清单
@@ -85,7 +104,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload
 
 - ✅ **文旅大模型对话**：基于 Qwen3 的深度景区知识问答。
 - ✅ **多模态语音交互**：支持 Web Speech API 录音与实时语音播报。
-- ✅ **灵汐数字人形象**：SVG 动态表情驱动，根据对话情感实时变换。
+- ✅ **灵汐 Live2D 数字人形象**：支持多数字人切换，根据对话情感与语音嘴型实时驱动。
 - ✅ **个性化路线推荐**：提供“历史文化深度游”与“自然风光全景游”等定制线路。
 - ✅ **祈福互动**：模拟“抱佛脚”、“九龙灌浴”等互动仪式感。
 
