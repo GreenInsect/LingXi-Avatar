@@ -8,6 +8,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'spots',     label: '景点' },
   { id: 'routes',    label: '路线' },
   { id: 'map',       label: '地图导航' },
+  { id: 'ar',        label: 'AR导览' },
   { id: 'nianhewan', label: '拈花湾' },
   { id: 'info',      label: '游览指南' },
   { id: 'history',   label: '历史文化' },

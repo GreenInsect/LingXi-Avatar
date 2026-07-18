@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import ARNavigator from '../components/ARNavigator'
 import { spots, routes, scenicInfo } from '../data/lingshan'
 import type { Spot, Route } from '../types'
 
@@ -86,6 +87,7 @@ export default function MapPage() {
       geo.getCurrentPosition((status: string, result: any) => {
         if (status === 'complete') {
           const pos = [result.position.lng, result.position.lat]
+          setUserPos(pos)
           m.add(new window.AMap.Marker({
             position: pos,
             icon: new window.AMap.Icon({
@@ -351,193 +353,12 @@ export default function MapPage() {
       {arMode && arTarget && (
         <ARNavigator
           target={arTarget}
-          userPos={userPos}
+          initialPosition={userPos}
           onClose={() => { setArMode(false); setArTarget(null) }}
         />
       )}
     </div>
   )
-}
-
-// ================================================================
-// AR 导航组件
-// ================================================================
-function ARNavigator({ target, userPos, onClose }: {
-  target: Spot; userPos: [number, number] | null; onClose: () => void
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const [heading, setHeading] = useState(0)
-  const [camError, setCamError] = useState('')
-  const [gps, setGps] = useState<[number, number] | null>(userPos)
-  const watchRef = useRef<number>(0)
-
-  // 启动摄像头
-  useEffect(() => {
-    navigator.mediaDevices?.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } })
-      .then(stream => { if (videoRef.current) videoRef.current.srcObject = stream })
-      .catch(() => setCamError('无法访问摄像头'))
-
-    return () => {
-      if (videoRef.current?.srcObject) {
-        (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop())
-      }
-    }
-  }, [])
-
-  // 监听设备方向（指南针）
-  useEffect(() => {
-    const handler = (e: DeviceOrientationEvent) => {
-      const h = (e as any).webkitCompassHeading ?? e.alpha ?? 0
-      setHeading(360 - h)
-    }
-    window.addEventListener('deviceorientation', handler)
-    return () => window.removeEventListener('deviceorientation', handler)
-  }, [])
-
-  // 持续获取 GPS
-  useEffect(() => {
-    if (!navigator.geolocation) return
-    watchRef.current = navigator.geolocation.watchPosition(
-      pos => setGps([pos.coords.longitude, pos.coords.latitude]),
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 },
-    )
-    return () => { if (watchRef.current) navigator.geolocation.clearWatch(watchRef.current) }
-  }, [])
-
-  // 计算目标方位
-  const bearing = gps && target.coords
-    ? computeBearing(gps[1], gps[0], target.coords[1], target.coords[0])
-    : 0
-  const relativeBearing = ((bearing - heading + 360 + 180) % 360) - 180 // -180 ~ +180
-  const distance = gps && target.coords
-    ? haversine(gps[1], gps[0], target.coords[1], target.coords[0])
-    : null
-
-  return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 3,
-      background: '#000', display: 'flex', flexDirection: 'column',
-    }}>
-      {/* 摄像头画布 */}
-      <video ref={videoRef} autoPlay playsInline muted
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
-      />
-
-      {/* AR 叠加层 */}
-      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-        {/* 顶部信息栏 */}
-        <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0,
-          background: 'linear-gradient(180deg, rgba(0,0,0,0.7), transparent)',
-          padding: '16px 20px 30px',
-        }}>
-          <div style={{ fontSize: 18, fontWeight: 700, color: 'white', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>
-            📷 AR 导航
-          </div>
-          <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.9)', marginTop: 4 }}>
-            目标：{target.name}
-          </div>
-          <div style={{ display: 'flex', gap: 20, marginTop: 6 }}>
-            <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)' }}>
-              📍 {distance != null ? formatDistance(distance) : '--'}
-            </span>
-            <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)' }}>
-              🧭 {bearing.toFixed(0)}°
-            </span>
-          </div>
-        </div>
-
-        {/* 方向指示箭头 */}
-        <div style={{
-          position: 'absolute', top: '50%', left: '50%',
-          transform: `translate(-50%, -50%) rotate(${relativeBearing.toFixed(1)}deg)`,
-          transition: 'transform 0.3s ease',
-        }}>
-          <svg width="80" height="120" viewBox="0 0 80 120">
-            <defs>
-              <filter id="glow">
-                <feGaussianBlur stdDeviation="3" result="blur" />
-                <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-              </filter>
-            </defs>
-            <polygon points="40,0 10,60 40,48 70,60"
-              fill="rgba(61,122,94,0.85)" stroke="white" strokeWidth="2" filter="url(#glow)" />
-          </svg>
-        </div>
-
-        {/* 目标名称标签 */}
-        {Math.abs(relativeBearing) < 45 && (
-          <div style={{
-            position: 'absolute', top: '38%', left: '50%',
-            transform: 'translate(-50%, -50%)',
-            background: 'rgba(0,0,0,0.75)', color: 'white',
-            padding: '4px 16px', borderRadius: 20, fontSize: 14, fontWeight: 600,
-            backdropFilter: 'blur(8px)',
-          }}>
-            {target.name} {target.icon}
-          </div>
-        )}
-
-        {/* 底部信息 */}
-        <div style={{
-          position: 'absolute', bottom: 0, left: 0, right: 0,
-          background: 'linear-gradient(0deg, rgba(0,0,0,0.7), transparent)',
-          padding: '30px 20px 16px',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
-        }}>
-          <div style={{ color: 'white', fontSize: 11 }}>
-            {camError || '手机指向箭头方向前进'}
-          </div>
-        </div>
-      </div>
-
-      {/* 关闭按钮 — 独立于 AR 层级，高于 Live2D */}
-      <button onClick={onClose} style={{
-        position: 'fixed', top: 16, right: 16, zIndex: 100,
-        width: 40, height: 40, borderRadius: '50%',
-        border: '2px solid rgba(255,255,255,0.6)', background: 'rgba(0,0,0,0.5)',
-        color: 'white', fontSize: 20, cursor: 'pointer',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>✕</button>
-
-      {/* 地图小窗 */}
-      <div style={{
-        position: 'absolute', bottom: 80, right: 12,
-        width: 140, height: 140, borderRadius: 12, overflow: 'hidden',
-        border: '2px solid rgba(255,255,255,0.5)', zIndex: 100,
-        boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
-      }}>
-        <iframe
-          src={`https://m.amap.com/navi/?dest=${target.coords?.[0] ?? 120.1025},${target.coords?.[1] ?? 31.4214}&destName=${encodeURIComponent(target.name)}&key=bc37009fd9f4e652e387802474fec299`}
-          style={{ width: '100%', height: '100%', border: 'none' }}
-        />
-      </div>
-    </div>
-  )
-}
-
-// ================================================================
-// 工具函数：方位角 & 距离
-// ================================================================
-function computeBearing(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const toRad = Math.PI / 180, toDeg = 180 / Math.PI
-  const dLng = (lng2 - lng1) * toRad
-  const y = Math.sin(dLng) * Math.cos(lat2 * toRad)
-  const x = Math.cos(lat1 * toRad) * Math.sin(lat2 * toRad) - Math.sin(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.cos(dLng)
-  return (Math.atan2(y, x) * toDeg + 360) % 360
-}
-
-function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371000, toRad = Math.PI / 180
-  const dLat = (lat2 - lat1) * toRad, dLng = (lng2 - lng1) * toRad
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-}
-
-function formatDistance(m: number): string {
-  if (m < 1000) return `${m.toFixed(0)}m`
-  return `${(m / 1000).toFixed(1)}km`
 }
 
 function markerSVG(color: string): string {

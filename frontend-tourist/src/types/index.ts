@@ -61,7 +61,7 @@ export interface SendMessageParams {
 
 // ── Data models ───────────────────────────────────────────────
 export type PageId =
-  | 'home' | 'spots' | 'routes' | 'map'
+  | 'home' | 'spots' | 'routes' | 'map' | 'ar'
   | 'nianhewan' | 'info' | 'history'
 
 export type SpotCategory =
