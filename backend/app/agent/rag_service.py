@@ -1,5 +1,5 @@
 """
-RAG 知识库服务 青春版 - Qwen3-Embedding-0.6B Embedding + ChromaDB 向量检索
+RAG 知识库服务 - 公共 Qwen Embedding API + ChromaDB 向量检索
 """
 # 已支持从数据库与 backend/uploads 动态加载知识文档，并可在线增删改。
 # TODO 后续可增加 RAG 生成式检索（RAG-Gen）
@@ -8,6 +8,7 @@ RAG 知识库服务 青春版 - Qwen3-Embedding-0.6B Embedding + ChromaDB 向量
 from __future__ import annotations
 
 import os
+import asyncio
 import csv
 import hashlib
 import json
@@ -15,10 +16,10 @@ import re
 import time
 from pathlib import Path
 from threading import RLock
-import asyncio
 
 from app.core.config import settings
 from app.core.logging import brief_text, elapsed_ms, get_logger
+from app.agent.qwen_client import qwen_client
 
 logger = get_logger(__name__)
 
@@ -189,21 +190,42 @@ LINGSHAN_KNOWLEDGE = [
 
 # Qwen Embedding 函数（供 ChromaDB 使用）
 class QwenEmbeddingFunction:
-    """
-    修改后的 Embedding 函数：
-    """
+    """ChromaDB 同步 embedding 函数，内部调用公共 Qwen/DashScope API。"""
+
     def __init__(self, service: 'RAGService'):
         self.service = service
 
     def __call__(self, input: list[str]) -> list[list[float]]:
-        # ChromaDB 的内置接口是同步的，这里使用内部 service 的同步包装方法
-        return asyncio.run(self.service.embed_batch(input))
+        return self.service.embed_batch_sync(input)
 
-class MyLocalQwenEF:
-    def __init__(self, model):
-        self.model = model
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        return self.model.encode(input).tolist()
+    def name(self) -> str:
+        return "qwen_dashscope"
+
+    def default_space(self) -> str:
+        return "cosine"
+
+    def supported_spaces(self) -> list[str]:
+        return ["cosine", "l2", "ip"]
+
+    def get_config(self) -> dict:
+        return {
+            "provider": "dashscope",
+            "model": self.service.embed_model,
+        }
+
+    @staticmethod
+    def validate_config(config: dict) -> None:
+        if not isinstance(config, dict):
+            raise ValueError("Qwen embedding config must be a dict")
+
+    @staticmethod
+    def build_from_config(config: dict):
+        return NotImplemented
+
+    def is_legacy(self) -> bool:
+        # This embedding function depends on the live RAGService/qwen_client instance,
+        # so Chroma should use the supplied object instead of trying to serialize it.
+        return True
 
 class RAGService:
     """
@@ -227,7 +249,6 @@ class RAGService:
         self._initialized = False
         self.collection = None
         self.db_client = None
-        self.model = None
         self.emb_fn = None
         self.documents: list[dict] = []
         self._index_lock = RLock()
@@ -235,11 +256,8 @@ class RAGService:
         self.backend_dir = Path(__file__).resolve().parents[2]
         self.upload_dir = self._resolve_data_dir(settings.UPLOAD_DIR, "uploads")
         self.chroma_dir = self._resolve_data_dir(settings.CHROMA_DB_DIR, "chroma_db")
-        self.model_path = settings.EMBEDDING_MODEL_PATH
-
-        self.client = None
-        self.device = None
         self.embed_model = settings.EMBEDDING_MODEL
+        self.collection_name = "LinXi_knowledge_base_qwen_api"
 
     def _resolve_data_dir(self, configured_path: str, default_name: str) -> Path:
         """Resolve app data dirs relative to backend/ even when cwd is repo root."""
@@ -271,7 +289,7 @@ class RAGService:
                 return candidate
         return candidates[0]
 
-    def initialize(self, force_reload: bool = False):
+    def initialize(self, force_reload: bool = False, include_large_uploads: bool | None = None):
         """同步初始化 Chroma，并从数据库/本地文件重建索引。"""
         start = time.perf_counter()
         with self._index_lock:
@@ -279,34 +297,24 @@ class RAGService:
                 logger.info("rag initialize skipped already_initialized=true")
                 return
 
-            self.documents = self._load_source_documents()
+            include_large = settings.RAG_INITIALIZE_ON_CHAT if include_large_uploads is None else include_large_uploads
+            self.documents = self._load_source_documents(include_large_uploads=include_large)
             try:
                 import chromadb
-                from sentence_transformers import SentenceTransformer
-                import torch
-
-                if self.device is None:
-                    self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
                 if self.emb_fn is None:
                     logger.info(
-                        "rag loading embedding model path=%s device=%s docs=%s",
-                        self.model_path,
-                        self.device,
+                        "rag using public qwen embedding api base_url=%s model=%s docs=%s",
+                        settings.VLLM_EMBED_BASE_URL,
+                        self.embed_model,
                         len(self.documents),
                     )
-                    self.model = SentenceTransformer(
-                        self.model_path,
-                        device=self.device,
-                        trust_remote_code=True,
-                        model_kwargs={"attn_implementation": "sdpa"},
-                    )
-                    self.emb_fn = MyLocalQwenEF(self.model)
+                    self.emb_fn = QwenEmbeddingFunction(self)
 
                 os.makedirs(self.chroma_dir, exist_ok=True)
                 self.db_client = chromadb.PersistentClient(path=str(self.chroma_dir))
                 self.collection = self.db_client.get_or_create_collection(
-                    name="LinXi_knowledge_base",
+                    name=self.collection_name,
                     metadata={"hnsw:space": "cosine"},
                     embedding_function=self.emb_fn,
                 )
@@ -330,24 +338,12 @@ class RAGService:
                 )
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """批量向量化实现，保留给云端/HTTP embedding 方案使用。"""
-        try:
-            if self.client is None:
-                from openai import AsyncOpenAI
-                self.client = AsyncOpenAI(
-                    api_key=settings.DASHSCOPE_API_KEY,
-                    base_url=settings.VLLM_EMBED_BASE_URL,
-                )
-            response = await self.client.embeddings.create(
-                model=self.embed_model,
-                input=texts,
-                dimensions=1024 if "v4" in self.embed_model.lower() else None,
-                encoding_format="float",
-            )
-            return [item.embedding for item in response.data]
-        except Exception as e:
-            print(f"❌ 批量 Embedding 失败: {e}")
-            raise e
+        """异步批量向量化，供非 Chroma 场景复用。"""
+        return await qwen_client.embed_batch(texts, model=self.embed_model)
+
+    def embed_batch_sync(self, texts: list[str]) -> list[list[float]]:
+        """同步批量向量化，供 ChromaDB embedding_function 调用。"""
+        return qwen_client.embed_batch_sync(texts, model=self.embed_model)
 
     def _builtin_documents(self) -> list[dict]:
         return [
@@ -412,17 +408,21 @@ class RAGService:
                 break
         return limited
 
-    def _load_source_documents(self) -> list[dict]:
+    def _load_source_documents(self, include_large_uploads: bool = False) -> list[dict]:
         db_docs, known_file_paths = self._load_database_documents()
-        file_docs = self._load_standalone_upload_documents(known_file_paths)
+        file_docs = self._load_standalone_upload_documents(
+            known_file_paths,
+            include_large_uploads=include_large_uploads,
+        )
         builtin_docs = self._builtin_documents()
         docs = self._limit_documents_for_chat(db_docs + file_docs + builtin_docs)
         logger.info(
-            "rag source documents loaded db_docs=%s file_docs=%s builtin_docs=%s total=%s",
+            "rag source documents loaded db_docs=%s file_docs=%s builtin_docs=%s total=%s include_large_uploads=%s",
             len(db_docs),
             len(file_docs),
             len(builtin_docs),
             len(docs),
+            include_large_uploads,
         )
         return docs
 
@@ -473,7 +473,11 @@ class RAGService:
 
         return docs, known_file_paths
 
-    def _load_standalone_upload_documents(self, known_file_paths: set[str]) -> list[dict]:
+    def _load_standalone_upload_documents(
+        self,
+        known_file_paths: set[str],
+        include_large_uploads: bool = False,
+    ) -> list[dict]:
         docs: list[dict] = []
         if not self.upload_dir.exists():
             return docs
@@ -487,12 +491,9 @@ class RAGService:
             if resolved in known_file_paths:
                 continue
             file_size = file_path.stat().st_size
-            if (
-                not settings.RAG_INITIALIZE_ON_CHAT
-                and file_size > settings.RAG_MAX_UPLOAD_FILE_BYTES_FOR_CHAT
-            ):
+            if not include_large_uploads and file_size > settings.RAG_MAX_UPLOAD_FILE_BYTES_FOR_CHAT:
                 logger.warning(
-                    "rag upload file skipped for chat because too large path=%s size_bytes=%s limit_bytes=%s",
+                    "rag upload file skipped in lightweight load because too large path=%s size_bytes=%s limit_bytes=%s",
                     file_path,
                     file_size,
                     settings.RAG_MAX_UPLOAD_FILE_BYTES_FOR_CHAT,
@@ -798,6 +799,19 @@ class RAGService:
             "db_id": int(doc_id) if str(doc_id).isdigit() else None,
         }
 
+    def _query_collection(self, query: str, top_k: int) -> tuple[int, dict | None]:
+        if self.collection is None:
+            return 0, None
+        with self._index_lock:
+            count = self.collection.count()
+            if count <= 0:
+                return count, None
+            results = self.collection.query(
+                query_texts=[query],
+                n_results=min(top_k, count),
+            )
+        return count, results
+
     async def search(self, query: str, top_k: int = None) -> list[dict]:
         """语义检索；向量不可用时降级为基于数据库/文件快照的关键词检索。"""
         start = time.perf_counter()
@@ -809,7 +823,7 @@ class RAGService:
         if not self._initialized:
             if not settings.RAG_INITIALIZE_ON_CHAT:
                 if not self.documents:
-                    self.documents = self._load_source_documents()
+                    self.documents = self._load_source_documents(include_large_uploads=False)
                 docs = self._keyword_search(query, k)
                 logger.info(
                     "rag search keyword fallback because not initialized query=%s docs=%s top_score=%s duration_ms=%s",
@@ -833,22 +847,17 @@ class RAGService:
             return docs
 
         try:
-            with self._index_lock:
-                count = self.collection.count()
-                if count <= 0:
-                    docs = self._keyword_search(query, k)
-                    logger.info(
-                        "rag search keyword fallback empty collection query=%s docs=%s top_score=%s duration_ms=%s",
-                        brief_text(query, 120),
-                        len(docs),
-                        docs[0].get("score") if docs else None,
-                        elapsed_ms(start),
-                    )
-                    return docs
-                results = self.collection.query(
-                    query_texts=[query],
-                    n_results=min(k, count),
+            count, results = await asyncio.to_thread(self._query_collection, query, k)
+            if count <= 0 or not results:
+                docs = self._keyword_search(query, k)
+                logger.info(
+                    "rag search keyword fallback empty collection query=%s docs=%s top_score=%s duration_ms=%s",
+                    brief_text(query, 120),
+                    len(docs),
+                    docs[0].get("score") if docs else None,
+                    elapsed_ms(start),
                 )
+                return docs
 
             docs = []
             if results.get("documents") and results["documents"][0]:
@@ -864,11 +873,21 @@ class RAGService:
                         "source": meta.get("source", ""),
                         "file_path": meta.get("file_path", ""),
                     })
+            keyword_docs = self._keyword_search(query, k)
+            seen_ids = {doc.get("id") for doc in docs}
+            for doc in keyword_docs:
+                if doc.get("id") in seen_ids:
+                    continue
+                docs.append(doc)
+                seen_ids.add(doc.get("id"))
+            docs.sort(key=lambda item: item.get("score", 0), reverse=True)
+            docs = docs[:k]
             logger.info(
-                "rag search vector done query=%s collection_count=%s docs=%s top_score=%s duration_ms=%s",
+                "rag search vector done query=%s collection_count=%s docs=%s keyword_docs=%s top_score=%s duration_ms=%s",
                 brief_text(query, 120),
                 count,
                 len(docs),
+                len(keyword_docs),
                 docs[0].get("score") if docs else None,
                 elapsed_ms(start),
             )
@@ -897,7 +916,7 @@ class RAGService:
         """关键词检索降级方案，使用当前数据库/文件快照。"""
         start = time.perf_counter()
         if not self.documents:
-            self.documents = self._load_source_documents()
+            self.documents = self._load_source_documents(include_large_uploads=False)
 
         scored = []
         query_lower = query.lower()
@@ -1022,19 +1041,40 @@ class RAGService:
             self.documents = [doc for doc in self.documents if doc.get("id") != source_id]
             self._delete_source(source_id)
 
-    async def reload_from_database(self):
-        """重新从数据库和 backend/uploads 文件扫描并重建索引。"""
+    def get_index_status(self) -> dict:
+        """返回当前向量索引状态，供管理后台展示。"""
+        chunks = 0
+        if self.collection is not None:
+            try:
+                chunks = self.collection.count()
+            except Exception as e:
+                logger.warning("rag index status collection count failed error=%s", e)
+        return {
+            "initialized": self._initialized,
+            "documents": len(self.documents),
+            "chunks": chunks,
+            "collection": self.collection_name,
+            "embedding_model": self.embed_model,
+        }
+
+    def reload_from_database_sync(self) -> dict:
+        """同步重建索引；耗时操作由 async 包装放到线程执行。"""
         with self._index_lock:
             if not self._initialized:
-                self.initialize(force_reload=True)
-                return
-            self.documents = self._load_source_documents()
-            self._rebuild_index(self.documents)
+                self.initialize(force_reload=True, include_large_uploads=True)
+            else:
+                self.documents = self._load_source_documents(include_large_uploads=True)
+                self._rebuild_index(self.documents)
+            return self.get_index_status()
+
+    async def reload_from_database(self) -> dict:
+        """重新从数据库和 backend/uploads 文件扫描并重建索引。"""
+        return await asyncio.to_thread(self.reload_from_database_sync)
 
     def get_all_documents(self) -> list[dict]:
         """获取当前数据库/文件知识快照。"""
         if not self.documents:
-            self.documents = self._load_source_documents()
+            self.documents = self._load_source_documents(include_large_uploads=False)
         return [doc.copy() for doc in self.documents]
 
     def format_context(self, docs: list[dict], max_chars: int = 2000) -> str:

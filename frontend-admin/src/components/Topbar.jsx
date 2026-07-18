@@ -8,7 +8,7 @@ const PAGE_TITLES = {
   avatar:        '数字人配置',
 }
 
-export default function Topbar({ activePage }) {
+export default function Topbar({ activePage, username, onLogout }) {
   const [time, setTime] = useState('')
   const apiBase = import.meta.env.VITE_ADMIN_API_BASE || '/api'
   const backendTarget = import.meta.env.VITE_ADMIN_BACKEND_URL || 'Vite proxy target'
@@ -80,6 +80,30 @@ export default function Topbar({ activePage }) {
         }}>
           {time}
         </div>
+
+        <div style={{
+          height: 26,
+          width: 1,
+          background: 'var(--border2)',
+        }} />
+
+        <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+          {username || 'admin'}
+        </div>
+
+        <button
+          onClick={onLogout}
+          style={{
+            padding: '5px 11px',
+            borderRadius: 8,
+            border: '1px solid var(--border2)',
+            background: 'var(--surface2)',
+            color: 'var(--text)',
+            fontSize: 12,
+          }}
+        >
+          退出
+        </button>
       </div>
     </header>
   )

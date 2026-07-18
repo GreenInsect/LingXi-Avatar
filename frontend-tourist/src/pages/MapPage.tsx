@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { spots, routes, scenicInfo } from '../data/lingshan'
 import type { Spot, Route } from '../types'
-import { useResponsive } from '../hooks/useResponsive'
 
 // ================================================================
 // 高德地图 API Key — 在此处替换为你的 Key
@@ -29,7 +28,6 @@ const CAT_LABELS: Record<string, string> = {
 
 export default function MapPage() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const { isMobile } = useResponsive()
   const [map, setMap] = useState<any>(null)
   const [selectedSpot, setSelectedSpot] = useState<Spot | null>(null)
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null)
@@ -37,6 +35,8 @@ export default function MapPage() {
   const [searchText, setSearchText] = useState('')
   const [searchTips, setSearchTips] = useState<any[]>([])
   const [userPos, setUserPos] = useState<[number, number] | null>(null)
+  const [arMode, setArMode] = useState(false)
+  const [arTarget, setArTarget] = useState<Spot | null>(null)
 
   useEffect(() => {
     if (window.AMap && window._mapLoaded) { initMap(); return }
@@ -185,19 +185,15 @@ export default function MapPage() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', height: '100%', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* sidebar */}
       <div style={{
-        width: isMobile ? '100%' : 320,
-        height: isMobile ? '42dvh' : 'auto',
-        minHeight: isMobile ? 270 : 'auto',
-        background: 'rgba(250,245,236,0.96)',
-        borderRight: isMobile ? 'none' : '1px solid var(--border)',
-        borderBottom: isMobile ? '1px solid var(--border)' : 'none',
+        width: 320, background: 'rgba(250,245,236,0.96)',
+        borderRight: '1px solid var(--border)',
         display: 'flex', flexDirection: 'column', overflowY: 'auto', flexShrink: 0,
       }}>
-        <div style={{ padding: isMobile ? '12px 14px' : '16px 20px', borderBottom: '1px solid var(--border)', position: 'relative' }}>
-          <h2 style={{ fontSize: isMobile ? 16 : 18, fontWeight: 600, color: 'var(--ink)', margin: 0 }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', position: 'relative' }}>
+          <h2 style={{ fontSize: 18, fontWeight: 600, color: 'var(--ink)', margin: 0 }}>
             🗺️ 景区导航地图
           </h2>
           <p style={{ fontSize: 11, color: 'var(--ink2)', margin: '4px 0 8px' }}>
@@ -219,7 +215,7 @@ export default function MapPage() {
           />
           {searchTips.length > 0 && (
             <div style={{
-              position: 'absolute', left: isMobile ? 14 : 20, right: isMobile ? 14 : 20, top: '100%',
+              position: 'absolute', left: 20, right: 20, top: '100%',
               background: 'white', borderRadius: 8, zIndex: 10,
               boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
               maxHeight: 200, overflowY: 'auto',
@@ -241,7 +237,7 @@ export default function MapPage() {
           )}
         </div>
 
-        <div style={{ padding: isMobile ? '10px 14px' : '12px 20px', borderBottom: '1px solid var(--border)' }}>
+        <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border)' }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', marginBottom: 8 }}>
             📍 推荐游览路线
           </div>
@@ -263,7 +259,7 @@ export default function MapPage() {
           ))}
         </div>
 
-        <div style={{ padding: isMobile ? '10px 14px' : '12px 20px', flex: 1, overflowY: 'auto' }}>
+        <div style={{ padding: '12px 20px', flex: 1, overflowY: 'auto' }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink)', marginBottom: 8 }}>
             📌 景区景点（{spots.filter(s => s.coords).length}）
           </div>
@@ -292,13 +288,21 @@ export default function MapPage() {
               {selectedSpot?.id === spot.id && (
                 <div style={{ marginTop: 8, fontSize: 11, color: 'var(--ink2)', lineHeight: 1.6 }}>
                   <div>{spot.brief}</div>
-                  <button onClick={(e) => { e.stopPropagation(); startNavigation(spot) }}
-                    disabled={planning}
-                    style={{
-                      marginTop: 8, padding: '5px 14px', borderRadius: 14,
-                      border: 'none', background: 'var(--jade)', color: 'white',
-                      fontSize: 11, cursor: 'pointer', opacity: planning ? 0.6 : 1,
-                    }}>{planning ? '路径规划中...' : '🚗 导航至此'}</button>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                    <button onClick={(e) => { e.stopPropagation(); startNavigation(spot) }}
+                      disabled={planning}
+                      style={{
+                        padding: '5px 14px', borderRadius: 14,
+                        border: 'none', background: 'var(--jade)', color: 'white',
+                        fontSize: 11, cursor: 'pointer', opacity: planning ? 0.6 : 1,
+                      }}>{planning ? '路径规划中...' : '🚗 导航至此'}</button>
+                    <button onClick={(e) => { e.stopPropagation(); setArTarget(spot); setArMode(true) }}
+                      style={{
+                        padding: '5px 14px', borderRadius: 14,
+                        border: '1px solid var(--jade)', background: 'transparent',
+                        color: 'var(--jade)', fontSize: 11, cursor: 'pointer',
+                      }}>📷 AR导航</button>
+                  </div>
                 </div>
               )}
             </div>
@@ -307,11 +311,11 @@ export default function MapPage() {
       </div>
 
       {/* map */}
-      <div style={{ flex: 1, minHeight: isMobile ? 'calc(58dvh - var(--nav-h))' : 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
         <div ref={containerRef} style={{ flex: 1 }} />
         <button onClick={locateUser} title="定位当前位置"
           style={{
-            position: 'absolute', right: isMobile ? 12 : 16, bottom: isMobile ? 20 : 32,
+            position: 'absolute', right: 16, bottom: 32,
             width: 36, height: 36, borderRadius: '50%',
             border: 'none', background: 'white',
             boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
@@ -326,7 +330,7 @@ export default function MapPage() {
           display: 'none',
         }} />
         <div style={{
-          position: 'absolute', left: isMobile ? 8 : 12, right: isMobile ? 8 : 'auto', top: 12,
+          position: 'absolute', left: 12, top: 12,
           background: 'rgba(255,255,255,0.92)', borderRadius: 8,
           padding: '6px 10px', fontSize: 10,
           boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
@@ -340,8 +344,200 @@ export default function MapPage() {
           ))}
         </div>
       </div>
+
+      {/* ================================================================
+          AR 导航视图
+          ================================================================ */}
+      {arMode && arTarget && (
+        <ARNavigator
+          target={arTarget}
+          userPos={userPos}
+          onClose={() => { setArMode(false); setArTarget(null) }}
+        />
+      )}
     </div>
   )
+}
+
+// ================================================================
+// AR 导航组件
+// ================================================================
+function ARNavigator({ target, userPos, onClose }: {
+  target: Spot; userPos: [number, number] | null; onClose: () => void
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [heading, setHeading] = useState(0)
+  const [camError, setCamError] = useState('')
+  const [gps, setGps] = useState<[number, number] | null>(userPos)
+  const watchRef = useRef<number>(0)
+
+  // 启动摄像头
+  useEffect(() => {
+    navigator.mediaDevices?.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } })
+      .then(stream => { if (videoRef.current) videoRef.current.srcObject = stream })
+      .catch(() => setCamError('无法访问摄像头'))
+
+    return () => {
+      if (videoRef.current?.srcObject) {
+        (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop())
+      }
+    }
+  }, [])
+
+  // 监听设备方向（指南针）
+  useEffect(() => {
+    const handler = (e: DeviceOrientationEvent) => {
+      const h = (e as any).webkitCompassHeading ?? e.alpha ?? 0
+      setHeading(360 - h)
+    }
+    window.addEventListener('deviceorientation', handler)
+    return () => window.removeEventListener('deviceorientation', handler)
+  }, [])
+
+  // 持续获取 GPS
+  useEffect(() => {
+    if (!navigator.geolocation) return
+    watchRef.current = navigator.geolocation.watchPosition(
+      pos => setGps([pos.coords.longitude, pos.coords.latitude]),
+      () => {},
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 },
+    )
+    return () => { if (watchRef.current) navigator.geolocation.clearWatch(watchRef.current) }
+  }, [])
+
+  // 计算目标方位
+  const bearing = gps && target.coords
+    ? computeBearing(gps[1], gps[0], target.coords[1], target.coords[0])
+    : 0
+  const relativeBearing = ((bearing - heading + 360 + 180) % 360) - 180 // -180 ~ +180
+  const distance = gps && target.coords
+    ? haversine(gps[1], gps[0], target.coords[1], target.coords[0])
+    : null
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 3,
+      background: '#000', display: 'flex', flexDirection: 'column',
+    }}>
+      {/* 摄像头画布 */}
+      <video ref={videoRef} autoPlay playsInline muted
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+      />
+
+      {/* AR 叠加层 */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+        {/* 顶部信息栏 */}
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0,
+          background: 'linear-gradient(180deg, rgba(0,0,0,0.7), transparent)',
+          padding: '16px 20px 30px',
+        }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: 'white', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>
+            📷 AR 导航
+          </div>
+          <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.9)', marginTop: 4 }}>
+            目标：{target.name}
+          </div>
+          <div style={{ display: 'flex', gap: 20, marginTop: 6 }}>
+            <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)' }}>
+              📍 {distance != null ? formatDistance(distance) : '--'}
+            </span>
+            <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)' }}>
+              🧭 {bearing.toFixed(0)}°
+            </span>
+          </div>
+        </div>
+
+        {/* 方向指示箭头 */}
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%',
+          transform: `translate(-50%, -50%) rotate(${relativeBearing.toFixed(1)}deg)`,
+          transition: 'transform 0.3s ease',
+        }}>
+          <svg width="80" height="120" viewBox="0 0 80 120">
+            <defs>
+              <filter id="glow">
+                <feGaussianBlur stdDeviation="3" result="blur" />
+                <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
+            </defs>
+            <polygon points="40,0 10,60 40,48 70,60"
+              fill="rgba(61,122,94,0.85)" stroke="white" strokeWidth="2" filter="url(#glow)" />
+          </svg>
+        </div>
+
+        {/* 目标名称标签 */}
+        {Math.abs(relativeBearing) < 45 && (
+          <div style={{
+            position: 'absolute', top: '38%', left: '50%',
+            transform: 'translate(-50%, -50%)',
+            background: 'rgba(0,0,0,0.75)', color: 'white',
+            padding: '4px 16px', borderRadius: 20, fontSize: 14, fontWeight: 600,
+            backdropFilter: 'blur(8px)',
+          }}>
+            {target.name} {target.icon}
+          </div>
+        )}
+
+        {/* 底部信息 */}
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          background: 'linear-gradient(0deg, rgba(0,0,0,0.7), transparent)',
+          padding: '30px 20px 16px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
+        }}>
+          <div style={{ color: 'white', fontSize: 11 }}>
+            {camError || '手机指向箭头方向前进'}
+          </div>
+        </div>
+      </div>
+
+      {/* 关闭按钮 — 独立于 AR 层级，高于 Live2D */}
+      <button onClick={onClose} style={{
+        position: 'fixed', top: 16, right: 16, zIndex: 100,
+        width: 40, height: 40, borderRadius: '50%',
+        border: '2px solid rgba(255,255,255,0.6)', background: 'rgba(0,0,0,0.5)',
+        color: 'white', fontSize: 20, cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>✕</button>
+
+      {/* 地图小窗 */}
+      <div style={{
+        position: 'absolute', bottom: 80, right: 12,
+        width: 140, height: 140, borderRadius: 12, overflow: 'hidden',
+        border: '2px solid rgba(255,255,255,0.5)', zIndex: 100,
+        boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+      }}>
+        <iframe
+          src={`https://m.amap.com/navi/?dest=${target.coords?.[0] ?? 120.1025},${target.coords?.[1] ?? 31.4214}&destName=${encodeURIComponent(target.name)}&key=bc37009fd9f4e652e387802474fec299`}
+          style={{ width: '100%', height: '100%', border: 'none' }}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// 工具函数：方位角 & 距离
+// ================================================================
+function computeBearing(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = Math.PI / 180, toDeg = 180 / Math.PI
+  const dLng = (lng2 - lng1) * toRad
+  const y = Math.sin(dLng) * Math.cos(lat2 * toRad)
+  const x = Math.cos(lat1 * toRad) * Math.sin(lat2 * toRad) - Math.sin(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.cos(dLng)
+  return (Math.atan2(y, x) * toDeg + 360) % 360
+}
+
+function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000, toRad = Math.PI / 180
+  const dLat = (lat2 - lat1) * toRad, dLng = (lng2 - lng1) * toRad
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function formatDistance(m: number): string {
+  if (m < 1000) return `${m.toFixed(0)}m`
+  return `${(m / 1000).toFixed(1)}km`
 }
 
 function markerSVG(color: string): string {

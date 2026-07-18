@@ -1,7 +1,7 @@
 """
-系统配置 - DashScope API + 本地 Embedding
+系统配置 - DashScope API + 公共 Qwen Embedding
   - Chat/Vision: DashScope API (qwen-plus / qwen-vl-plus)
-  - Embedding: 本地 vLLM (Qwen3-Embedding-0.6B)
+  - Embedding: DashScope OpenAI 兼容接口
 """
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
@@ -25,10 +25,16 @@ class Settings(BaseSettings):
     QWEN_MODEL: str = "qwen-plus"
     QWEN_VL_MODEL: str = "qwen-vl-plus"
 
-    # ── 本地 Embedding 模型 ─
-    VLLM_EMBED_BASE_URL: str = "http://localhost:8003"
-    EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-0.6B"
-    EMBEDDING_MODEL_PATH: str = "/var/tmp/Qwen3-Embedding-0.6B"
+    # ── 公共 Qwen Embedding API ─
+    # 保留 VLLM_EMBED_BASE_URL 环境变量名兼容旧 .env，也支持 DASHSCOPE_EMBED_BASE_URL。
+    VLLM_EMBED_BASE_URL: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        validation_alias=AliasChoices("DASHSCOPE_EMBED_BASE_URL", "VLLM_EMBED_BASE_URL"),
+    )
+    EMBEDDING_MODEL: str = "text-embedding-v3"
+    EMBEDDING_DIMENSIONS: int = 0
+    # 旧本地模型路径已不再用于在线 embedding，仅保留配置兼容。
+    EMBEDDING_MODEL_PATH: str = ""
 
     # ── 数据库 ─
     DATABASE_URL: str = "sqlite:///./ai_guide.db"
@@ -36,6 +42,8 @@ class Settings(BaseSettings):
     # ── JWT ─
     SECRET_KEY: str = "lingshan-scenic-secret-key-change-in-prod"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: str = "admin123"
 
     # ── 知识库 ─
     KNOWLEDGE_BASE_DIR: str = "./knowledge_base"

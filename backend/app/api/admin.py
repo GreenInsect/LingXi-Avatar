@@ -3,8 +3,12 @@
 """
 import os
 import time
+from datetime import datetime, timedelta
+from hmac import compare_digest
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -17,12 +21,81 @@ from app.core.logging import brief_text, elapsed_ms, get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
+security = HTTPBearer(auto_error=False)
+JWT_ALGORITHM = "HS256"
+
+
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+def _admin_auth_error() -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail="管理员登录已失效或无权限",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def _create_admin_token(username: str) -> tuple[str, datetime]:
+    expires_at = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = jwt.encode(
+        {
+            "sub": username,
+            "scope": "admin",
+            "exp": expires_at,
+        },
+        settings.SECRET_KEY,
+        algorithm=JWT_ALGORITHM,
+    )
+    return token, expires_at
+
+
+async def require_admin(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> dict:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise _admin_auth_error()
+    try:
+        payload = jwt.decode(
+            credentials.credentials,
+            settings.SECRET_KEY,
+            algorithms=[JWT_ALGORITHM],
+        )
+    except JWTError:
+        raise _admin_auth_error()
+
+    if payload.get("scope") != "admin" or payload.get("sub") != settings.ADMIN_USERNAME:
+        raise _admin_auth_error()
+    return payload
+
+
+@router.post("/login")
+async def admin_login(payload: AdminLoginRequest):
+    username = (payload.username or "").strip()
+    password = payload.password or ""
+    if not (
+        compare_digest(username, settings.ADMIN_USERNAME)
+        and compare_digest(password, settings.ADMIN_PASSWORD)
+    ):
+        logger.warning("admin login failed username=%s", brief_text(username, 60))
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+    token, expires_at = _create_admin_token(username)
+    logger.info("admin login success username=%s expires_at=%s", username, expires_at.isoformat())
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_at": expires_at.isoformat(),
+        "username": username,
+    }
 
 
 # ── 系统健康检查 ───────────────────────────────────────────────
 @router.get("/health")
-async def system_health():
-    """检查三个 vLLM 服务进程 + RAG 可用性"""
+async def system_health(_admin: dict = Depends(require_admin)):
+    """检查 DashScope 服务 + RAG 可用性"""
     health = await qwen_client.health_check()
     rag_status = rag_service._initialized
     return {
@@ -193,7 +266,7 @@ class AvatarConfigCreate(BaseModel):
 
 
 @router.get("/avatar/list")
-async def list_avatars(db: Session = Depends(get_db)):
+async def list_avatars(db: Session = Depends(get_db), _admin: dict = Depends(require_admin)):
     start = time.perf_counter()
     avatars = db.query(AvatarConfig).order_by(AvatarConfig.id.asc()).all()
     logger.info("admin avatar list start count=%s", len(avatars))
@@ -209,7 +282,11 @@ async def list_avatars(db: Session = Depends(get_db)):
 
 
 @router.post("/avatar/create")
-async def create_avatar(config: AvatarConfigCreate, db: Session = Depends(get_db)):
+async def create_avatar(
+    config: AvatarConfigCreate,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     payload = _model_dump(config)
     logger.info(
         "admin avatar create start name=%s avatar_type=%s voice_id=%s greeting=%s",
@@ -227,7 +304,11 @@ async def create_avatar(config: AvatarConfigCreate, db: Session = Depends(get_db
 
 
 @router.put("/avatar/{avatar_id}/activate")
-async def activate_avatar(avatar_id: int, db: Session = Depends(get_db)):
+async def activate_avatar(
+    avatar_id: int,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     logger.info("admin avatar activate start id=%s", avatar_id)
     avatar = db.query(AvatarConfig).filter(AvatarConfig.id == avatar_id).first()
     if not avatar:
@@ -246,7 +327,12 @@ async def activate_avatar(avatar_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/avatar/{avatar_id}")
-async def update_avatar(avatar_id: int, config: AvatarConfigCreate, db: Session = Depends(get_db)):
+async def update_avatar(
+    avatar_id: int,
+    config: AvatarConfigCreate,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     payload = _model_dump(config)
     logger.info(
         "admin avatar update start id=%s name=%s avatar_type=%s voice_id=%s",
@@ -267,7 +353,7 @@ async def update_avatar(avatar_id: int, config: AvatarConfigCreate, db: Session 
 
 
 @router.get("/voices")
-async def get_voices():
+async def get_voices(_admin: dict = Depends(require_admin)):
     return {"voices": get_available_voices()}
 
 
@@ -284,7 +370,7 @@ def _brief_content(content: str | None, limit: int = 200) -> str:
 
 
 @router.get("/knowledge/list")
-async def list_knowledge(db: Session = Depends(get_db)):
+async def list_knowledge(db: Session = Depends(get_db), _admin: dict = Depends(require_admin)):
     docs = db.query(KnowledgeDoc).filter(KnowledgeDoc.is_active == True).all()
     indexed_docs = rag_service.get_all_documents()
     upload_only_docs = [d for d in indexed_docs if d.get("source") == "upload_file"]
@@ -312,11 +398,61 @@ async def list_knowledge(db: Session = Depends(get_db)):
             }
             for d in docs
         ],
+        "index_status": rag_service.get_index_status(),
     }
 
 
+async def _run_knowledge_reindex() -> dict:
+    start = time.perf_counter()
+    logger.info("admin knowledge reindex start")
+    status = await rag_service.reload_from_database()
+    logger.info(
+        "admin knowledge reindex done initialized=%s documents=%s chunks=%s duration_ms=%s",
+        status.get("initialized"),
+        status.get("documents"),
+        status.get("chunks"),
+        elapsed_ms(start),
+    )
+    if not status.get("initialized") or (
+        status.get("documents", 0) > 0 and status.get("chunks", 0) <= 0
+    ):
+        logger.error(
+            "admin knowledge reindex failed initialized=%s documents=%s chunks=%s duration_ms=%s",
+            status.get("initialized"),
+            status.get("documents"),
+            status.get("chunks"),
+            elapsed_ms(start),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "知识库向量化失败，请检查后端日志、ChromaDB 状态和 Qwen Embedding API 配置",
+                "index_status": status,
+            },
+        )
+    return {
+        "message": "知识库已重新扫描并完成向量化索引",
+        "index_status": status,
+    }
+
+
+@router.post("/knowledge-index/rebuild")
+async def rebuild_knowledge_index(_admin: dict = Depends(require_admin)):
+    return await _run_knowledge_reindex()
+
+
+@router.post("/knowledge/reindex")
+async def reindex_knowledge(_admin: dict = Depends(require_admin)):
+    """兼容旧前端路径；新前端使用 /knowledge-index/rebuild 避免和 /knowledge/{doc_id} 冲突。"""
+    return await _run_knowledge_reindex()
+
+
 @router.post("/knowledge/add")
-async def add_knowledge(doc: KnowledgeCreate, db: Session = Depends(get_db)):
+async def add_knowledge(
+    doc: KnowledgeCreate,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     content = doc.content.strip()
     if not doc.title.strip() or not content:
         raise HTTPException(status_code=400, detail="标题和内容不能为空")
@@ -344,6 +480,7 @@ async def upload_knowledge(
     file: UploadFile = File(...),
     category: str = Form("general"),
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
 ):
     filename = file.filename or "knowledge.txt"
     suffix = Path(filename).suffix.lower()
@@ -388,7 +525,12 @@ async def upload_knowledge(
 
 
 @router.put("/knowledge/{doc_id}")
-async def update_knowledge(doc_id: int, payload: KnowledgeCreate, db: Session = Depends(get_db)):
+async def update_knowledge(
+    doc_id: int,
+    payload: KnowledgeCreate,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     doc = db.query(KnowledgeDoc).filter(KnowledgeDoc.id == doc_id).first()
     if not doc or not doc.is_active:
         raise HTTPException(status_code=404, detail="文档不存在")
@@ -415,7 +557,11 @@ async def update_knowledge(doc_id: int, payload: KnowledgeCreate, db: Session = 
 
 
 @router.delete("/knowledge/{doc_id}")
-async def delete_knowledge(doc_id: int, db: Session = Depends(get_db)):
+async def delete_knowledge(
+    doc_id: int,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     doc = db.query(KnowledgeDoc).filter(KnowledgeDoc.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="文档不存在")

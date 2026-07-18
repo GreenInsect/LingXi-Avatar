@@ -1,10 +1,10 @@
 """
-Qwen 模型客户端 - DashScope API (Chat/VL) + 本地 Embedding
+Qwen 模型客户端 - DashScope API (Chat/VL/Embedding)
 
 DashScope 暴露 OpenAI 兼容接口：
   - /v1/chat/completions  → 文本对话（qwen-plus）
   - /v1/chat/completions  → 多模态对话（qwen-vl-plus）
-  - Embedding: 本地 vLLM / SentenceTransformer
+  - /v1/embeddings        → 文本向量（text-embedding-v3 等）
 """
 from __future__ import annotations
 
@@ -29,7 +29,9 @@ _TIMEOUT = httpx.Timeout(
 # DashScope OpenAI 兼容接口
 _BASE_URL = settings.DASHSCOPE_BASE_URL.rstrip("/")
 _VL_BASE_URL = settings.DASHSCOPE_VL_BASE_URL.rstrip("/")
+_EMBED_BASE_URL = settings.VLLM_EMBED_BASE_URL.rstrip("/")
 _API_KEY = settings.DASHSCOPE_API_KEY
+_EMBED_MAX_BATCH_SIZE = 10
 
 
 def _messages_chars(messages: list[dict]) -> int:
@@ -54,23 +56,54 @@ def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
     return f"status={status} body={body}"
 
 
+def _iter_embedding_batches(texts: list[str]):
+    for start in range(0, len(texts), _EMBED_MAX_BATCH_SIZE):
+        yield start, texts[start:start + _EMBED_MAX_BATCH_SIZE]
+
+
 class QwenClient:
     """Qwen 系列模型统一客户端 — Chat/VL 通过 DashScope API"""
 
     def __init__(self):
         self.chat_base = f"{_BASE_URL}/chat/completions"
         self.vl_base = f"{_VL_BASE_URL}/chat/completions"
+        self.embed_base = f"{_EMBED_BASE_URL}/embeddings"
         self.model = settings.QWEN_MODEL
         self.vl_model = settings.QWEN_VL_MODEL
+        self.embedding_model = settings.EMBEDDING_MODEL
         logger.info(
-            "qwen client initialized base_url=%s vl_base_url=%s chat_model=%s vl_model=%s timeout_read=%s timeout_connect=%s",
+            "qwen client initialized base_url=%s vl_base_url=%s embed_base_url=%s chat_model=%s vl_model=%s embedding_model=%s timeout_read=%s timeout_connect=%s",
             _BASE_URL,
             _VL_BASE_URL,
+            _EMBED_BASE_URL,
             self.model,
             self.vl_model,
+            self.embedding_model,
             settings.DASHSCOPE_READ_TIMEOUT_SECONDS,
             settings.DASHSCOPE_CONNECT_TIMEOUT_SECONDS,
         )
+
+    def _headers(self) -> dict:
+        return {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {_API_KEY}",
+        }
+
+    def _embedding_payload(self, texts: list[str], model: Optional[str] = None) -> dict:
+        payload = {
+            "model": model or self.embedding_model,
+            "input": [text if isinstance(text, str) else str(text) for text in texts],
+            "encoding_format": "float",
+        }
+        if settings.EMBEDDING_DIMENSIONS > 0:
+            payload["dimensions"] = settings.EMBEDDING_DIMENSIONS
+        return payload
+
+    @staticmethod
+    def _parse_embeddings(data: dict) -> list[list[float]]:
+        items = data.get("data") or []
+        items = sorted(items, key=lambda item: item.get("index", 0))
+        return [item["embedding"] for item in items]
 
     async def chat(
         self,
@@ -86,10 +119,7 @@ class QwenClient:
             "max_tokens": max_tokens,
             "stream": False,
         }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {_API_KEY}",
-        }
+        headers = self._headers()
         start = time.perf_counter()
         logger.info(
             "qwen chat start model=%s messages=%s input_chars=%s max_tokens=%s temperature=%s",
@@ -144,10 +174,7 @@ class QwenClient:
             "max_tokens": max_tokens,
             "stream": True,
         }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {_API_KEY}",
-        }
+        headers = self._headers()
         start = time.perf_counter()
         chunk_count = 0
         output_chars = 0
@@ -276,10 +303,7 @@ class QwenClient:
             "max_tokens": max_tokens,
             "stream": False,
         }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {_API_KEY}",
-        }
+        headers = self._headers()
         start = time.perf_counter()
         logger.info(
             "qwen vision start model=%s prompt_chars=%s image_chars=%s mime_type=%s max_tokens=%s",
@@ -319,18 +343,145 @@ class QwenClient:
             )
             raise
 
+    async def embed_batch(
+        self,
+        texts: list[str],
+        model: Optional[str] = None,
+    ) -> list[list[float]]:
+        """通过公共 Qwen/DashScope API 批量生成文本向量。"""
+        if not texts:
+            return []
+
+        model_name = model or self.embedding_model
+        start = time.perf_counter()
+        logger.info(
+            "qwen embedding start model=%s texts=%s input_chars=%s base_url=%s max_batch_size=%s",
+            model_name,
+            len(texts),
+            sum(len(text or "") for text in texts),
+            _EMBED_BASE_URL,
+            _EMBED_MAX_BATCH_SIZE,
+        )
+        try:
+            embeddings: list[list[float]] = []
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                for batch_start, batch_texts in _iter_embedding_batches(texts):
+                    payload = self._embedding_payload(batch_texts, model=model)
+                    resp = await client.post(self.embed_base, json=payload, headers=self._headers())
+                    resp.raise_for_status()
+                    batch_embeddings = self._parse_embeddings(resp.json())
+                    if len(batch_embeddings) != len(batch_texts):
+                        raise RuntimeError(
+                            f"Qwen embedding returned {len(batch_embeddings)} vectors for {len(batch_texts)} texts"
+                        )
+                    embeddings.extend(batch_embeddings)
+                    logger.debug(
+                        "qwen embedding batch done model=%s batch_start=%s batch_size=%s",
+                        payload["model"],
+                        batch_start,
+                        len(batch_texts),
+                    )
+            logger.info(
+                "qwen embedding done model=%s texts=%s dimensions=%s requests=%s duration_ms=%s",
+                model_name,
+                len(embeddings),
+                len(embeddings[0]) if embeddings else 0,
+                (len(texts) + _EMBED_MAX_BATCH_SIZE - 1) // _EMBED_MAX_BATCH_SIZE,
+                elapsed_ms(start),
+            )
+            return embeddings
+        except httpx.HTTPStatusError as e:
+            logger.exception(
+                "qwen embedding http error model=%s duration_ms=%s %s",
+                model_name,
+                elapsed_ms(start),
+                _http_error_detail(e),
+            )
+            raise
+        except Exception:
+            logger.exception(
+                "qwen embedding failed model=%s duration_ms=%s",
+                model_name,
+                elapsed_ms(start),
+            )
+            raise
+
+    def embed_batch_sync(
+        self,
+        texts: list[str],
+        model: Optional[str] = None,
+    ) -> list[list[float]]:
+        """ChromaDB embedding function 使用的同步版本，避免事件循环内 asyncio.run 冲突。"""
+        if not texts:
+            return []
+
+        model_name = model or self.embedding_model
+        start = time.perf_counter()
+        logger.info(
+            "qwen embedding sync start model=%s texts=%s input_chars=%s base_url=%s max_batch_size=%s",
+            model_name,
+            len(texts),
+            sum(len(text or "") for text in texts),
+            _EMBED_BASE_URL,
+            _EMBED_MAX_BATCH_SIZE,
+        )
+        try:
+            embeddings: list[list[float]] = []
+            with httpx.Client(timeout=_TIMEOUT) as client:
+                for batch_start, batch_texts in _iter_embedding_batches(texts):
+                    payload = self._embedding_payload(batch_texts, model=model)
+                    resp = client.post(self.embed_base, json=payload, headers=self._headers())
+                    resp.raise_for_status()
+                    batch_embeddings = self._parse_embeddings(resp.json())
+                    if len(batch_embeddings) != len(batch_texts):
+                        raise RuntimeError(
+                            f"Qwen embedding returned {len(batch_embeddings)} vectors for {len(batch_texts)} texts"
+                        )
+                    embeddings.extend(batch_embeddings)
+                    logger.debug(
+                        "qwen embedding sync batch done model=%s batch_start=%s batch_size=%s",
+                        payload["model"],
+                        batch_start,
+                        len(batch_texts),
+                    )
+            logger.info(
+                "qwen embedding sync done model=%s texts=%s dimensions=%s requests=%s duration_ms=%s",
+                model_name,
+                len(embeddings),
+                len(embeddings[0]) if embeddings else 0,
+                (len(texts) + _EMBED_MAX_BATCH_SIZE - 1) // _EMBED_MAX_BATCH_SIZE,
+                elapsed_ms(start),
+            )
+            return embeddings
+        except httpx.HTTPStatusError as e:
+            logger.exception(
+                "qwen embedding sync http error model=%s duration_ms=%s %s",
+                model_name,
+                elapsed_ms(start),
+                _http_error_detail(e),
+            )
+            raise
+        except Exception:
+            logger.exception(
+                "qwen embedding sync failed model=%s duration_ms=%s",
+                model_name,
+                elapsed_ms(start),
+            )
+            raise
+
     async def health_check(self) -> dict:
         """检查 DashScope API 可用性"""
         result = {
-            "chat":  {"ok": False, "model": self.model, "backend": "DashScope"},
-            "vl":    {"ok": False, "model": self.vl_model, "backend": "DashScope"},
+            "chat": {"ok": False, "model": self.model, "backend": "DashScope"},
+            "vl": {"ok": False, "model": self.vl_model, "backend": "DashScope"},
+            "embedding": {"ok": False, "model": self.embedding_model, "backend": "DashScope"},
         }
 
-        async def _probe(url: str, key: str):
+        async def _probe(base_url: str, key: str):
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
                     resp = await client.get(
-                        f"{(_VL_BASE_URL if key == 'vl' else _BASE_URL)}/models",
+                        f"{base_url}/models",
                         headers={"Authorization": f"Bearer {_API_KEY}"},
                     )
                     if resp.status_code == 200:
@@ -341,8 +492,9 @@ class QwenClient:
 
         import asyncio
         await asyncio.gather(
-            _probe(self.chat_base, "chat"),
-            _probe(self.vl_base, "vl"),
+            _probe(_BASE_URL, "chat"),
+            _probe(_VL_BASE_URL, "vl"),
+            _probe(_EMBED_BASE_URL, "embedding"),
         )
         return result
 

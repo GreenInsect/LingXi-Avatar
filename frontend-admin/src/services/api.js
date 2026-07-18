@@ -1,5 +1,30 @@
 const BASE = import.meta.env.VITE_ADMIN_API_BASE || '/api'
 const REQUEST_TIMEOUT_MS = Number(import.meta.env.VITE_ADMIN_API_TIMEOUT_MS || 120000)
+const ADMIN_SESSION_KEY = 'lingshan-admin-session'
+
+export function getAdminSession() {
+  try {
+    const raw = window.localStorage.getItem(ADMIN_SESSION_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+export function setAdminSession(session) {
+  window.localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session))
+}
+
+export function clearAdminSession(emitExpiredEvent = true) {
+  window.localStorage.removeItem(ADMIN_SESSION_KEY)
+  if (emitExpiredEvent) {
+    window.dispatchEvent(new CustomEvent('admin-session-expired'))
+  }
+}
+
+function getAdminToken() {
+  return getAdminSession()?.access_token || ''
+}
 
 function makeRequestId(prefix = 'admin-api') {
   const randomPart = Math.random().toString(16).slice(2, 10)
@@ -32,15 +57,18 @@ function describeBody(body) {
 }
 
 async function request(path, options = {}) {
+  const { skipAuth, ...fetchOptions } = options
   const requestId = makeRequestId()
   const startedAt = performance.now()
-  const method = options.method || 'GET'
+  const method = fetchOptions.method || 'GET'
   const controller = new AbortController()
   const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const token = skipAuth ? '' : getAdminToken()
 
   const headers = {
     'X-Request-ID': requestId,
-    ...(options.headers || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(fetchOptions.headers || {}),
   }
 
   console.info('[admin-api] request start', {
@@ -49,12 +77,13 @@ async function request(path, options = {}) {
     path,
     base: BASE,
     timeoutMs: REQUEST_TIMEOUT_MS,
-    ...describeBody(options.body),
+    auth: token ? 'bearer' : 'none',
+    ...describeBody(fetchOptions.body),
   })
 
   try {
     const res = await fetch(`${BASE}${path}`, {
-      ...options,
+      ...fetchOptions,
       method,
       headers,
       signal: controller.signal,
@@ -65,6 +94,9 @@ async function request(path, options = {}) {
     const durationMs = Math.round(performance.now() - startedAt)
 
     if (!res.ok) {
+      if (res.status === 401 && !skipAuth) {
+        clearAdminSession()
+      }
       console.error('[admin-api] request failed', {
         requestId,
         responseRequestId,
@@ -75,7 +107,10 @@ async function request(path, options = {}) {
         durationMs,
         body: bodyText,
       })
-      throw new Error(`${method} ${path} HTTP ${res.status}: ${bodyText || res.statusText}`)
+      const error = new Error(`${method} ${path} HTTP ${res.status}: ${bodyText || res.statusText}`)
+      error.status = res.status
+      error.body = bodyText
+      throw error
     }
 
     console.info('[admin-api] request done', {
@@ -137,6 +172,18 @@ function jsonOptions(method, payload) {
   }
 }
 
+// ── Auth ────────────────────────────────────────────────────
+export function loginAdmin(payload) {
+  return request('/admin/login', {
+    ...jsonOptions('POST', payload),
+    skipAuth: true,
+  })
+}
+
+export function logoutAdmin() {
+  clearAdminSession(false)
+}
+
 // ── Analytics ──────────────────────────────────────────────
 export function getDashboard() {
   return request('/analytics/dashboard')
@@ -164,6 +211,10 @@ export function uploadKnowledgeFile(file, category = 'general') {
   fd.append('file', file)
   fd.append('category', category)
   return request('/admin/knowledge/upload', { method: 'POST', body: fd })
+}
+
+export function reindexKnowledge() {
+  return request('/admin/knowledge-index/rebuild', { method: 'POST' })
 }
 
 export function deleteKnowledge(id) {

@@ -8,12 +8,16 @@ from datetime import datetime, timedelta
 
 from app.models.database import get_db, Conversation
 from app.agent import analyze_conversations_report
+from app.api.admin import require_admin
 
 router = APIRouter()
 
 
 @router.get("/dashboard")
-async def get_dashboard(db: Session = Depends(get_db)):
+async def get_dashboard(
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     """数据大屏概览"""
     today = datetime.utcnow().date()
     week_ago = today - timedelta(days=7)
@@ -97,7 +101,11 @@ async def get_dashboard(db: Session = Depends(get_db)):
 
 
 @router.get("/sentiment-report")
-async def get_sentiment_report(days: int = 7, db: Session = Depends(get_db)):
+async def get_sentiment_report(
+    days: int = 7,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     """生成 AI 感受度报告（Qwen3 分析）"""
     since = datetime.utcnow() - timedelta(days=days)
     conversations = db.query(Conversation).filter(
@@ -116,7 +124,12 @@ async def get_sentiment_report(days: int = 7, db: Session = Depends(get_db)):
 
 
 @router.get("/conversation-list")
-async def get_conversation_list(page: int = 1, page_size: int = 20, db: Session = Depends(get_db)):
+async def get_conversation_list(
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin),
+):
     offset = (page - 1) * page_size
     sessions = db.query(
         Conversation.session_id,

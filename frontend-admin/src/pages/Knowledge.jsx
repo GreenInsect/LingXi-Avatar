@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Card, CardHeader, CardBody, Button, FormField, Input, Textarea, Select, Badge, Spinner } from '../components/UI'
-import { getKnowledgeList, addKnowledge, uploadKnowledgeFile, deleteKnowledge } from '../services/api'
+import { getKnowledgeList, addKnowledge, uploadKnowledgeFile, reindexKnowledge, deleteKnowledge } from '../services/api'
 
 const CAT_OPTIONS = [
   { value: 'history',    label: '历史沿革', color: 'var(--gold)' },
@@ -16,8 +16,10 @@ function catLabel(c) { return CAT_OPTIONS.find(o => o.value === c)?.label || c }
 
 export default function Knowledge({ showToast }) {
   const [docs, setDocs] = useState([])
+  const [indexStatus, setIndexStatus] = useState(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [indexing, setIndexing] = useState(false)
   const [form, setForm] = useState({ title: '', category: 'history', content: '' })
   const fileRef = useRef(null)
 
@@ -30,6 +32,7 @@ export default function Knowledge({ showToast }) {
         ...(d.custom_docs || []).map(x => ({ ...x, isBuiltin: false })),
       ]
       setDocs(all)
+      setIndexStatus(d.index_status || null)
     } catch {
       showToast('加载知识库失败', 'error')
     } finally {
@@ -81,6 +84,25 @@ export default function Knowledge({ showToast }) {
       showToast('删除失败', 'error')
     }
   }
+
+  const handleReindex = async () => {
+    if (!confirm('确认重新扫描数据库和 uploads 文件，并重建全部向量索引？')) return
+    setIndexing(true)
+    try {
+      const d = await reindexKnowledge()
+      setIndexStatus(d.index_status || null)
+      showToast(`✅ 重建完成：${d.index_status?.chunks ?? 0} 个向量片段`, 'success')
+      load()
+    } catch {
+      showToast('重建索引失败，请检查后端日志和 Qwen Embedding API 配置', 'error')
+    } finally {
+      setIndexing(false)
+    }
+  }
+
+  const statusText = indexStatus
+    ? `${indexStatus.initialized ? '已向量化' : '未初始化'} · ${indexStatus.documents ?? 0} 文档 · ${indexStatus.chunks ?? 0} 片段 · ${indexStatus.embedding_model || 'embedding'}`
+    : `共 ${docs.length} 篇文档`
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.3fr', gap: 18, animation: 'fadeUp 0.3s ease' }}>
@@ -144,8 +166,16 @@ export default function Knowledge({ showToast }) {
         <CardHeader
           title="知识库文档列表"
           icon="📋"
-          subtitle={`共 ${docs.length} 篇文档`}
-          action={<Button variant="ghost" size="sm" onClick={load}>🔄 刷新</Button>}
+          subtitle={statusText}
+          action={
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button variant="ghost" size="sm" onClick={load} disabled={loading}>刷新</Button>
+              <Button variant="success" size="sm" onClick={handleReindex} disabled={indexing || submitting}>
+                {indexing ? <Spinner size={12} /> : '向量化'}
+                {indexing ? '索引中' : '重建索引'}
+              </Button>
+            </div>
+          }
         />
         <CardBody style={{ flex: 1, overflowY: 'auto', maxHeight: 'calc(100vh - 200px)', paddingTop: 10 }}>
           {loading

@@ -1,6 +1,6 @@
 """
 灵山胜境 AI 数字人导游系统 - 后端主程序
-技术栈：FastAPI + LangGraph + Qwen3(vLLM) + ChromaDB RAG
+技术栈：FastAPI + LangGraph + Qwen/DashScope API + ChromaDB RAG
 """
 
 from contextlib import asynccontextmanager
@@ -30,12 +30,12 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时初始化 RAG，关闭时清理"""
-    logger.info("初始化灵山胜境 AI 导游系统（vLLM 推理后端）")
+    logger.info("初始化灵山胜境 AI 导游系统（DashScope API 后端）")
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     os.makedirs(settings.CHROMA_DB_DIR, exist_ok=True)
     os.makedirs(settings.KNOWLEDGE_BASE_DIR, exist_ok=True)
 
-    # 初始化 RAG 知识库（连接 vLLM Embedding 服务）
+    # 初始化 RAG 知识库（连接公共 Qwen Embedding API）
     # rag_service.initialize()
 
     logger.info(
@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="灵山胜境 AI 数字人导游系统",
-    description="基于 LangGraph + Qwen3(vLLM) 的智能景区导览系统",
+    description="基于 LangGraph + Qwen/DashScope API 的智能景区导览系统",
     version="2.1.0",
     lifespan=lifespan,
 )
@@ -122,8 +122,8 @@ async def root():
     return {
         "system": "灵山胜境 AI 数字人导游",
         "version": "2.1.0",
-        "inference_backend": "DashScope API + 本地Embedding",
-        "agent": "LangGraph + Qwen3",
+        "inference_backend": "DashScope API + 公共 Qwen Embedding",
+        "agent": "LangGraph + Qwen",
         "features": ["RAG知识库", "图像理解(VL)", "意图路由", "情感分析"],
         "endpoints": {
             "chat":  settings.DASHSCOPE_BASE_URL,

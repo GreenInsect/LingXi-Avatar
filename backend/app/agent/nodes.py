@@ -39,14 +39,35 @@ GUIDE_SYSTEM = """你是灵山胜境的AI数字人导游，默认名字是 Lingx
 
 回答规范：
 - 语言自然流畅，口语化，适合语音播放，每次回答控制在200字以内
-- 【重要】每条回复必须以[emotion]标签开头，且包含两到三个[emotion标签]可用的英文标签：
-  [happy] 开心 [anger] 生气 [sad] 悲伤 [surprise] 惊喜 [love] 喜爱
-  [confused] 困惑 [shy] 害羞 [proud] 自豪 [neutral] 中性
+- 【重要】每条回复必须且只能以一个[emotion]标签开头：
+  [happy] 开心 [gentle] 温柔 [curious] 好奇 [professional] 专业 [enthusiastic] 热情 [surprise] 惊喜
   示例："[happy]哇！灵山大佛太壮观了，您知道吗它有88米高呢～"
   错误（缺少标签）："哇！灵山大佛太壮观了..."
 - 适当使用"您知道吗"、"其实"、"哇"等口语化表达增加亲切感
 - 推荐路线时给出具体建议，如"建议您先去...，再到..."
 - 图像分析时结合景区知识给出专业解读"""
+
+
+SCENIC_KEYWORDS = {
+    "灵山", "灵山胜境", "景区", "景点", "大佛", "灵山大佛", "梵宫", "九龙灌浴", "吉祥颂",
+    "五印坛城", "祥符禅寺", "佛手", "天下第一掌", "百子戏弥勒", "曼飞龙塔", "拈花湾",
+    "门票", "票价", "开放时间", "营业时间", "表演", "演出", "观光车", "停车", "餐饮",
+    "素斋", "路线", "游览", "导览", "怎么玩", "怎么走", "在哪", "地址", "太湖",
+}
+ROUTE_KEYWORDS = {"路线", "行程", "游览", "怎么玩", "怎么逛", "推荐", "半日", "一天", "亲子", "老人"}
+EMOTION_KEYWORDS = {"投诉", "不满", "差评", "生气", "失望", "太差", "不好", "服务差"}
+
+
+def _rule_based_intent(text: str) -> str | None:
+    """景区强相关问题优先进入 RAG，避免模型分类波动导致漏检索。"""
+    value = text or ""
+    if any(keyword in value for keyword in EMOTION_KEYWORDS):
+        return "emotion"
+    if not any(keyword in value for keyword in SCENIC_KEYWORDS):
+        return None
+    if any(keyword in value for keyword in ROUTE_KEYWORDS):
+        return "route"
+    return "qa"
 
 
 # 1. 意图识别节点 
@@ -80,6 +101,19 @@ async def intent_classifier(state: AgentState) -> dict:
         return {
             "intent": "image",
             "agent_steps": [f"[意图识别] 检测到图片输入，路由至图像分析节点"],
+        }
+
+    rule_intent = _rule_based_intent(user_input)
+    if rule_intent:
+        logger.info(
+            "node intent_classifier rule matched session_id=%s intent=%s duration_ms=%s",
+            state.get("session_id"),
+            rule_intent,
+            elapsed_ms(start),
+        )
+        return {
+            "intent": rule_intent,
+            "agent_steps": [f"[意图识别] 景区关键词规则命中，intent={rule_intent}"],
         }
 
     prompt_messages = [
