@@ -373,10 +373,10 @@ export default function FloatingAvatar({
     <div style={{
       position: 'fixed',
       right: isMobile ? 8 : 20,
-      bottom: isMobile ? 8 : 20,
+      bottom: isMobile ? 'calc(300px + env(safe-area-inset-bottom))' : 20,
       left: isMobile ? 8 : 'auto',
       width: isMobile ? 'auto' : 'min(390px, calc(100vw - 32px))',
-      height: isMobile ? 'min(640px, calc(100dvh - 16px))' : 'min(640px, calc(100vh - 40px))',
+      height: isMobile ? 'min(500px, calc(100dvh - 316px - env(safe-area-inset-bottom)))' : 'min(640px, calc(100vh - 40px))',
       zIndex: elevated ? 830 : 500,
       display: 'flex', flexDirection: 'column',
       background: 'linear-gradient(180deg, rgba(255,252,245,0.98), rgba(247,238,222,0.97))',
@@ -386,7 +386,7 @@ export default function FloatingAvatar({
       border: '1px solid rgba(201,168,76,0.28)',
       overflow: 'hidden',
       animation: 'bubblePop 0.32s cubic-bezier(0.34,1.56,0.64,1)',
-      transformOrigin: 'bottom right',
+      transformOrigin: isMobile ? 'bottom left' : 'bottom right',
     }}>
       {/* Header */}
       <div style={{
@@ -415,29 +415,31 @@ export default function FloatingAvatar({
               {guideName}
             </div>
           </div>
-          <select
-            value={selectedAvatarId}
-            onChange={event => onAvatarChange(event.target.value)}
-            aria-label="选择数字人"
-            title="选择数字人"
-            style={{
-              width: isMobile ? 108 : 122,
-              height: 34,
-              borderRadius: 10,
-              border: '1px solid rgba(61,122,94,0.22)',
-              background: 'rgba(255,252,245,0.86)',
-              color: 'var(--ink)',
-              outline: 'none',
-              padding: '0 10px',
-              fontSize: isMobile ? 11 : 12,
-              fontWeight: 700,
-              boxShadow: '0 4px 14px rgba(26,15,10,0.06)',
-            }}
-          >
-            {avatarOptions.map(avatar => (
-              <option key={avatar.id} value={avatar.id}>{avatar.name || avatar.id}</option>
-            ))}
-          </select>
+          {!isMobile && (
+            <select
+              value={selectedAvatarId}
+              onChange={event => onAvatarChange(event.target.value)}
+              aria-label="选择数字人"
+              title="选择数字人"
+              style={{
+                width: 122,
+                height: 34,
+                borderRadius: 10,
+                border: '1px solid rgba(61,122,94,0.22)',
+                background: 'rgba(255,252,245,0.86)',
+                color: 'var(--ink)',
+                outline: 'none',
+                padding: '0 10px',
+                fontSize: 12,
+                fontWeight: 700,
+                boxShadow: '0 4px 14px rgba(26,15,10,0.06)',
+              }}
+            >
+              {avatarOptions.map(avatar => (
+                <option key={avatar.id} value={avatar.id}>{avatar.name || avatar.id}</option>
+              ))}
+            </select>
+          )}
           <button onClick={onToggle} title="关闭" style={{
             width: isMobile ? 32 : 34, height: isMobile ? 32 : 34, borderRadius: 10,
             background: 'rgba(26,15,10,0.07)', color: 'var(--ink)',
@@ -448,6 +450,50 @@ export default function FloatingAvatar({
             onMouseLeave={e => (e.currentTarget as HTMLButtonElement).style.background = 'rgba(26,15,10,0.07)'}
           >×</button>
         </div>
+        {isMobile && (
+          <div
+            role="listbox"
+            aria-label="切换数字人形象"
+            style={{
+              display: 'flex',
+              gap: 8,
+              overflowX: 'auto',
+              paddingBottom: 2,
+              scrollbarWidth: 'none',
+            }}
+          >
+            {avatarOptions.map(avatar => {
+              const active = avatar.id === selectedAvatarId
+              const name = avatar.name || avatar.id
+              return (
+                <button
+                  key={avatar.id}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  onClick={() => onAvatarChange(avatar.id)}
+                  title={`切换为 ${name}`}
+                  style={{
+                    flex: '0 0 auto',
+                    minWidth: 72,
+                    height: 34,
+                    padding: '0 12px',
+                    borderRadius: 999,
+                    border: active ? '1px solid rgba(61,122,94,0.64)' : '1px solid rgba(201,168,76,0.28)',
+                    background: active ? 'linear-gradient(135deg, rgba(61,122,94,0.96), rgba(78,155,120,0.92))' : 'rgba(255,252,245,0.86)',
+                    color: active ? 'white' : 'var(--ink2)',
+                    fontSize: 12,
+                    fontWeight: 800,
+                    whiteSpace: 'nowrap',
+                    boxShadow: active ? '0 8px 18px rgba(61,122,94,0.20)' : '0 4px 12px rgba(26,15,10,0.05)',
+                  }}
+                >
+                  {name}
+                </button>
+              )
+            })}
+          </div>
+        )}
         <div style={{
           display: 'flex',
           alignItems: 'center',

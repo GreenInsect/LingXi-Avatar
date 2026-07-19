@@ -18,23 +18,30 @@ import {
 import type { StageTransform } from './live2d/live2dEngine.ts';
 
 const defaultAvatarId = avatarList[0].id;
+const mobileDefaultAvatarId = 'yumi';
 
-function createNeutralMix(avatarId: string): ExpressionLayer[] {
-  return [{ key: getAvatarNeutralExpressionId(getAvatarById(avatarId)), weight: 1 }];
+function getStageTransformDefaults(avatar: AvatarManifest, isMobile: boolean): StageTransform {
+  const defaults = avatar.transformDefaults;
+  if (!isMobile) return defaults;
+
+  return {
+    scale: defaults.scale * 0.5,
+    offsetX: defaults.offsetX - 0.04,
+    offsetY: defaults.offsetY - 1.16,
+  };
 }
 
 export default function App() {
   const { isMobile } = useResponsive()
+  const initialAvatarId = isMobile ? mobileDefaultAvatarId : defaultAvatarId
   const [activePage, setActivePage] = useState<PageId>('home')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [avatarOpen, setAvatarOpen] = useState(false)
   const [arAssistantMode, setArAssistantMode] = useState(false)
 
-  const [selectedAvatarId, setSelectedAvatarId] = useState(defaultAvatarId);
-  const [selectedAvatar, setSelectedAvatar] = useState<AvatarManifest>(getAvatarById(defaultAvatarId));
-  const [activeExpressionMix, setActiveExpressionMix] = useState<ExpressionLayer[]>(
-    createNeutralMix(defaultAvatarId),
-  );
+  const [selectedAvatarId, setSelectedAvatarId] = useState(initialAvatarId);
+  const [selectedAvatar, setSelectedAvatar] = useState<AvatarManifest | null>(null);
+  const [activeExpressionMix, setActiveExpressionMix] = useState<ExpressionLayer[]>([]);
   const [activeParameterOverrides, setActiveParameterOverrides] = useState<ParameterOverride[]>([]);
   const [watermarkVisible, setWatermarkVisible] = useState(false);
   const [stageTransform, setStageTransform] = useState<StageTransform>(
@@ -49,8 +56,11 @@ export default function App() {
     setActiveParameterOverrides(data.parameterOverrides);
   };
 
+  const shouldRenderLive2DStage = Boolean(selectedAvatar);
+
   // 初始化水印可见性
   useEffect(() => {
+    if (!selectedAvatar) return;
     setWatermarkVisible(selectedAvatar.watermark?.enabledByDefault ?? false);
   }, [selectedAvatar]);
 
@@ -60,14 +70,15 @@ export default function App() {
     let cancelled = false;
     void resolveAvatarManifestById(selectedAvatarId).then((resolved) => {
       if (cancelled) return;
-      setSelectedAvatar(
+      const displayAvatar =
         isMobile && resolved.mobileModelJson
           ? { ...resolved, modelJson: resolved.mobileModelJson }
-          : resolved,
-      );
-      setStageTransform(resolved.transformDefaults);
-      setWatermarkVisible(resolved.watermark?.enabledByDefault ?? false);
-      setActiveExpressionMix([{ key: getAvatarNeutralExpressionId(resolved), weight: 1 }]);
+          : resolved;
+
+      setSelectedAvatar(displayAvatar);
+      setStageTransform(getStageTransformDefaults(displayAvatar, isMobile));
+      setWatermarkVisible(displayAvatar.watermark?.enabledByDefault ?? false);
+      setActiveExpressionMix([{ key: getAvatarNeutralExpressionId(displayAvatar), weight: 1 }]);
       setActiveParameterOverrides([]);
       if (!hasResolvedInitialAvatar.current) {
         hasResolvedInitialAvatar.current = true;
@@ -97,49 +108,30 @@ export default function App() {
           onAROverlayChange={setArAssistantMode}
         />
       </div>
-      <Live2DStage
-        avatar={selectedAvatar}
-        expressionMix={activeExpressionMix}
-        parameterOverrides={activeParameterOverrides}
-        watermarkVisible={!watermarkVisible}
-        arMode={arAssistantMode}
-        transform={stageTransform}
-        onTransformChange={setStageTransform}
-        onClick={() => setAvatarOpen(v => !v)}
-      />
-      {isMobile && !avatarOpen && (
-        <button
-          onClick={() => setAvatarOpen(true)}
-          title="打开数字导游"
-          style={{
-            position: 'fixed',
-            right: 12,
-            bottom: 12,
-            zIndex: arAssistantMode ? 810 : 460,
-            minHeight: 44,
-            padding: '0 16px',
-            borderRadius: 999,
-            border: '1px solid rgba(61,122,94,0.28)',
-            background: 'linear-gradient(135deg, rgba(61,122,94,0.96), rgba(78,155,120,0.94))',
-            color: 'white',
-            fontSize: 13,
-            fontWeight: 700,
-            boxShadow: '0 12px 30px rgba(26,15,10,0.22)',
-          }}
-        >
-          数字导游
-        </button>
+      {shouldRenderLive2DStage && selectedAvatar && (
+        <Live2DStage
+          avatar={selectedAvatar}
+          expressionMix={activeExpressionMix}
+          parameterOverrides={activeParameterOverrides}
+          watermarkVisible={!watermarkVisible}
+          arMode={arAssistantMode}
+          transform={stageTransform}
+          onTransformChange={setStageTransform}
+          onClick={() => setAvatarOpen(v => !v)}
+        />
       )}
-      <FloatingAvatar
-        open={avatarOpen}
-        onToggle={() => setAvatarOpen(v => !v)}
-        elevated={arAssistantMode}
-        selectedAvatar={selectedAvatar}
-        selectedAvatarId={selectedAvatarId}
-        avatarOptions={avatarList}
-        onAvatarChange={setSelectedAvatarId}
-        onAvatarUpdate={handleAvatarUpdate}
-      />
+      {selectedAvatar && (
+        <FloatingAvatar
+          open={avatarOpen}
+          onToggle={() => setAvatarOpen(v => !v)}
+          elevated={arAssistantMode}
+          selectedAvatar={selectedAvatar}
+          selectedAvatarId={selectedAvatarId}
+          avatarOptions={avatarList}
+          onAvatarChange={setSelectedAvatarId}
+          onAvatarUpdate={handleAvatarUpdate}
+        />
+      )}
     </div>
   )
 }

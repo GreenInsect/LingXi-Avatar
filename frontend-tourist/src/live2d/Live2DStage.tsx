@@ -252,9 +252,11 @@ export function Live2DStage({
     });
   }
 
+  const loadFailed = status === 'Load failed';
+
   return (
     <div
-      className={`stage-shell${arMode ? ' stage-shell--ar' : ''}`}
+      className={`stage-shell${arMode ? ' stage-shell--ar' : ''}${loadFailed ? ' stage-shell--error' : ''}`}
       style={onClick ? { cursor: 'pointer', touchAction: 'none' } : { touchAction: 'none' }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -264,7 +266,7 @@ export function Live2DStage({
       onWheel={handleWheel}
     >
       <div ref={containerRef} className="stage-canvas" />
-      <div className="stage-status">{status}</div>
+      <div className="stage-status">{loadFailed ? '数字人加载失败' : status}</div>
     </div>
   );
 }
