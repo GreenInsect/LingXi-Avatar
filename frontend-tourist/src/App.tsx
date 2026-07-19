@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Navbar from './components/Navbar'
 import Sidebar from './components/Sidebar'
 import MainContent from './components/MainContent'
@@ -28,6 +28,7 @@ export default function App() {
   const [activePage, setActivePage] = useState<PageId>('home')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [avatarOpen, setAvatarOpen] = useState(false)
+  const [arAssistantMode, setArAssistantMode] = useState(false)
 
   const [selectedAvatarId, setSelectedAvatarId] = useState(defaultAvatarId);
   const [selectedAvatar, setSelectedAvatar] = useState<AvatarManifest>(getAvatarById(defaultAvatarId));
@@ -89,13 +90,19 @@ export default function App() {
           activePage={activePage}
           onNavigate={(p) => { setActivePage(p); setSidebarOpen(false) }}
         />
-        <MainContent activePage={activePage} onNavigate={setActivePage} />
+        <MainContent
+          activePage={activePage}
+          onNavigate={setActivePage}
+          onOpenAvatar={() => setAvatarOpen(true)}
+          onAROverlayChange={setArAssistantMode}
+        />
       </div>
       <Live2DStage
         avatar={selectedAvatar}
         expressionMix={activeExpressionMix}
         parameterOverrides={activeParameterOverrides}
         watermarkVisible={!watermarkVisible}
+        arMode={arAssistantMode}
         transform={stageTransform}
         onTransformChange={setStageTransform}
         onClick={() => setAvatarOpen(v => !v)}
@@ -108,7 +115,7 @@ export default function App() {
             position: 'fixed',
             right: 12,
             bottom: 12,
-            zIndex: 460,
+            zIndex: arAssistantMode ? 810 : 460,
             minHeight: 44,
             padding: '0 16px',
             borderRadius: 999,
@@ -126,6 +133,7 @@ export default function App() {
       <FloatingAvatar
         open={avatarOpen}
         onToggle={() => setAvatarOpen(v => !v)}
+        elevated={arAssistantMode}
         selectedAvatar={selectedAvatar}
         selectedAvatarId={selectedAvatarId}
         avatarOptions={avatarList}

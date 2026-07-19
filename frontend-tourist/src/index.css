@@ -972,3 +972,40 @@ button {
     justify-self: stretch;
   }
 }
+
+.stage-shell.stage-shell--ar {
+  left: 16px;
+  bottom: calc(150px + env(safe-area-inset-bottom));
+  width: 310px;
+  height: 430px;
+  z-index: 760;
+  pointer-events: auto;
+  filter: drop-shadow(0 18px 34px rgba(0, 0, 0, 0.34));
+}
+
+.stage-shell.stage-shell--ar .stage-status,
+.stage-shell.stage-shell--ar .stage-hint {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .stage-shell.stage-shell--ar {
+    left: -16px;
+    bottom: calc(172px + env(safe-area-inset-bottom));
+    width: 220px;
+    height: 315px;
+    z-index: 760;
+    pointer-events: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .stage-shell.stage-shell--ar {
+    left: -34px;
+    bottom: calc(172px + env(safe-area-inset-bottom));
+    width: 210px;
+    height: 305px;
+    z-index: 760;
+    pointer-events: auto;
+  }
+}

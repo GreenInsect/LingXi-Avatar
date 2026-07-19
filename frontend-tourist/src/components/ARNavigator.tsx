@@ -12,10 +12,18 @@ type DeviceOrientationEventWithPermission = typeof DeviceOrientationEvent & {
 interface ARNavigatorProps {
   target: Spot
   initialPosition?: [number, number] | null
+  onGuideOpen?: () => void
+  onOverlayChange?: (active: boolean) => void
   onClose: () => void
 }
 
-export default function ARNavigator({ target, initialPosition = null, onClose }: ARNavigatorProps) {
+export default function ARNavigator({
+  target,
+  initialPosition = null,
+  onGuideOpen,
+  onOverlayChange,
+  onClose,
+}: ARNavigatorProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const watchRef = useRef<number | null>(null)
@@ -46,6 +54,11 @@ export default function ARNavigator({ target, initialPosition = null, onClose }:
     const [lng, lat] = target.coords ?? [120.1006, 31.4258]
     return `https://uri.amap.com/navigation?to=${lng},${lat},${encodeURIComponent(target.name)}&mode=walk&policy=1&src=lingshan&coordinate=gaode&callnative=1`
   }, [target.coords, target.name])
+
+  useEffect(() => {
+    onOverlayChange?.(true)
+    return () => onOverlayChange?.(false)
+  }, [onOverlayChange])
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach(track => track.stop())
@@ -295,6 +308,20 @@ export default function ARNavigator({ target, initialPosition = null, onClose }:
                 开启 AR 导航
               </button>
               <button
+                onClick={onGuideOpen}
+                style={{
+                  width: isMobile ? 82 : 96,
+                  borderRadius: 12,
+                  border: '1px solid rgba(232,207,136,0.38)',
+                  color: 'white',
+                  fontSize: 13,
+                  fontWeight: 800,
+                  background: 'rgba(232,207,136,0.16)',
+                }}
+              >
+                数字导游
+              </button>
+              <button
                 onClick={onClose}
                 style={{
                   width: 70,
@@ -345,22 +372,42 @@ export default function ARNavigator({ target, initialPosition = null, onClose }:
                 ))}
               </div>
             </div>
-            <button
-              onClick={onClose}
-              aria-label="关闭 AR 导航"
-              style={{
-                width: 42,
-                height: 42,
-                borderRadius: '50%',
-                background: 'rgba(0,0,0,0.46)',
-                border: '1px solid rgba(255,255,255,0.24)',
-                color: 'white',
-                fontSize: 20,
-                flexShrink: 0,
-              }}
-            >
-              x
-            </button>
+            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+              <button
+                onClick={onGuideOpen}
+                aria-label="打开数字导游"
+                style={{
+                  minWidth: isMobile ? 70 : 92,
+                  height: 42,
+                  borderRadius: 999,
+                  background: 'rgba(232,207,136,0.18)',
+                  border: '1px solid rgba(232,207,136,0.34)',
+                  color: 'white',
+                  fontSize: isMobile ? 12 : 13,
+                  fontWeight: 850,
+                  backdropFilter: 'blur(12px)',
+                  boxShadow: '0 10px 28px rgba(0,0,0,0.2)',
+                }}
+              >
+                {isMobile ? '导游' : '数字导游'}
+              </button>
+              <button
+                onClick={onClose}
+                aria-label="关闭 AR 导航"
+                style={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: '50%',
+                  background: 'rgba(0,0,0,0.46)',
+                  border: '1px solid rgba(255,255,255,0.24)',
+                  color: 'white',
+                  fontSize: 20,
+                  flexShrink: 0,
+                }}
+              >
+                x
+              </button>
+            </div>
           </div>
 
           <div style={{

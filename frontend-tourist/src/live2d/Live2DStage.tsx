@@ -18,6 +18,7 @@ type Live2DStageProps = {
   expressionMix: ExpressionLayer[];
   parameterOverrides: ParameterOverride[];
   watermarkVisible: boolean;
+  arMode?: boolean;
   transform: StageTransform;
   onTransformChange: (transform: StageTransform) => void;
   onClick?: () => void;
@@ -41,6 +42,7 @@ export function Live2DStage({
   expressionMix,
   parameterOverrides,
   watermarkVisible,
+  arMode = false,
   transform,
   onTransformChange,
   onClick,
@@ -252,7 +254,7 @@ export function Live2DStage({
 
   return (
     <div
-      className="stage-shell"
+      className={`stage-shell${arMode ? ' stage-shell--ar' : ''}`}
       style={onClick ? { cursor: 'pointer', touchAction: 'none' } : { touchAction: 'none' }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

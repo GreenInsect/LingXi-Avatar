@@ -6,7 +6,12 @@ import type { Spot } from '../types'
 
 const arSpots = spots.filter(spot => spot.coords)
 
-export default function ARPage() {
+interface ARPageProps {
+  onOpenAvatar: () => void
+  onAROverlayChange: (active: boolean) => void
+}
+
+export default function ARPage({ onOpenAvatar, onAROverlayChange }: ARPageProps) {
   const { isMobile, isTablet } = useResponsive()
   const [selectedId, setSelectedId] = useState(arSpots[0]?.id ?? '')
   const [arOpen, setArOpen] = useState(false)
@@ -47,7 +52,7 @@ export default function ARPage() {
               AR 实景导览
             </h2>
             <p style={{ fontSize: 14, color: 'rgba(26,15,10,0.62)', lineHeight: 1.9, marginBottom: 20 }}>
-              选择目标景点后开启导览，系统会根据当前位置、方向和景点坐标给出实景方向指引。
+              选择目标景点后开启导览，系统会根据当前位置、方向和景点坐标给出实景方向指引，数字导游会浮在 AR 画面上方，可随时提问。
             </p>
 
             <div style={{
@@ -130,6 +135,8 @@ export default function ARPage() {
       {arOpen && (
         <ARNavigator
           target={selectedSpot}
+          onGuideOpen={onOpenAvatar}
+          onOverlayChange={onAROverlayChange}
           onClose={() => setArOpen(false)}
         />
       )}

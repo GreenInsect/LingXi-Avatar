@@ -27,7 +27,12 @@ const CAT_LABELS: Record<string, string> = {
   culture: '文化', worship: '祈福', nature: '自然',
 }
 
-export default function MapPage() {
+interface MapPageProps {
+  onOpenAvatar: () => void
+  onAROverlayChange: (active: boolean) => void
+}
+
+export default function MapPage({ onOpenAvatar, onAROverlayChange }: MapPageProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [map, setMap] = useState<any>(null)
   const [selectedSpot, setSelectedSpot] = useState<Spot | null>(null)
@@ -354,6 +359,8 @@ export default function MapPage() {
         <ARNavigator
           target={arTarget}
           initialPosition={userPos}
+          onGuideOpen={onOpenAvatar}
+          onOverlayChange={onAROverlayChange}
           onClose={() => { setArMode(false); setArTarget(null) }}
         />
       )}

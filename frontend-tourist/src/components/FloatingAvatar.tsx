@@ -149,6 +149,7 @@ function buildAvatarPersonalityPrompt(avatar: AvatarManifest) {
 
 interface FloatingAvatarProps {
   open: boolean; onToggle: () => void;
+  elevated?: boolean;
   selectedAvatar: AvatarManifest;
   selectedAvatarId: string;
   avatarOptions: AvatarManifest[];
@@ -175,6 +176,7 @@ interface LingshanResponse {
 export default function FloatingAvatar({
   open,
   onToggle,
+  elevated = false,
   onAvatarUpdate,
   selectedAvatar,
   selectedAvatarId,
@@ -375,7 +377,7 @@ export default function FloatingAvatar({
       left: isMobile ? 8 : 'auto',
       width: isMobile ? 'auto' : 'min(390px, calc(100vw - 32px))',
       height: isMobile ? 'min(640px, calc(100dvh - 16px))' : 'min(640px, calc(100vh - 40px))',
-      zIndex: 500,
+      zIndex: elevated ? 830 : 500,
       display: 'flex', flexDirection: 'column',
       background: 'linear-gradient(180deg, rgba(255,252,245,0.98), rgba(247,238,222,0.97))',
       backdropFilter: 'blur(22px)',

@@ -9,15 +9,22 @@ import { NianheWanPage, InfoPage, HistoryPage } from '../pages/OtherPages'
 interface MainContentProps {
   activePage: PageId
   onNavigate: (p: PageId) => void
+  onOpenAvatar: () => void
+  onAROverlayChange: (active: boolean) => void
 }
 
-export default function MainContent({ activePage, onNavigate }: MainContentProps) {
+export default function MainContent({
+  activePage,
+  onNavigate,
+  onOpenAvatar,
+  onAROverlayChange,
+}: MainContentProps) {
   const pages: Record<PageId, React.ReactNode> = {
     home:      <HomePage onNavigate={onNavigate} />,
     spots:     <SpotsPage />,
     routes:    <RoutesPage />,
-    map:       <MapPage />,
-    ar:        <ARPage />,
+    map:       <MapPage onOpenAvatar={onOpenAvatar} onAROverlayChange={onAROverlayChange} />,
+    ar:        <ARPage onOpenAvatar={onOpenAvatar} onAROverlayChange={onAROverlayChange} />,
     nianhewan: <NianheWanPage />,
     info:      <InfoPage />,
     history:   <HistoryPage />,
