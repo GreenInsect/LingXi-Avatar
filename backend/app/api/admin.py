@@ -110,60 +110,75 @@ async def system_health(_admin: dict = Depends(require_admin)):
 
 
 # ── 数字人配置 ─────────────────────────────────────────────────
+DEFAULT_TTS_VOICE_ID = "longanhuan_v3.6"
+LEGACY_TTS_VOICE_IDS = {
+    "Cherry",
+    "Serena",
+    "Ethan",
+    "Chelsie",
+    "Momo",
+    "Moon",
+    "zh-CN-XiaohanNeural",
+    "zh-CN-YunxiNeural",
+    "zh-CN-YunjianNeural",
+    "zh-CN-YunyangNeural",
+}
+
+
 AVATAR_PRESETS = {
     "lingxi": {
         "name": "Lingxi",
         "avatar_type": "lingxi",
-        "voice_id": "Cherry",
+        "voice_id": "longanhuan_v3.6",
         "personality": "温柔清晰、真诚可靠、文化感强，适合作为灵山胜境主数字导游，能够自然讲解景区文化、路线、门票和游览建议。",
         "greeting": "您好！我是灵山胜境数字导游 Lingxi，很高兴为您服务！请问您想了解什么？",
     },
     "yumi": {
         "name": "Yumi",
         "avatar_type": "yumi",
-        "voice_id": "Cherry",
+        "voice_id": "longanhuan_v3.6",
         "personality": "温柔明亮、亲和可靠、表达丰富，适合担任默认景区数字导游，回答清晰自然，并能主动照顾游客情绪。",
         "greeting": "您好！我是灵山胜境数字导游 Yumi，很高兴为您服务！请问您想了解什么？",
     },
     "strawberryBunny": {
         "name": "草莓兔兔",
         "avatar_type": "strawberryBunny",
-        "voice_id": "Cherry",
+        "voice_id": "longanhuan_v3.6",
         "personality": "甜美亲切、活泼可爱、语气柔和，适合亲子游客、轻松问答和温暖陪伴式讲解。",
         "greeting": "您好！我是灵山胜境数字导游草莓兔兔，今天想带您甜甜地逛一逛景区～",
     },
     "bingtang": {
         "name": "冰糖",
         "avatar_type": "bingtang",
-        "voice_id": "Cherry",
+        "voice_id": "longanhuan_v3.6",
         "personality": "干练自信、表达利落、镜头感强，适合进行重点景点讲解、活动主持和高信息密度问答。",
         "greeting": "您好！我是灵山胜境数字导游冰糖，接下来由我为您清晰介绍景区亮点。",
     },
     "ellen": {
         "name": "Ellen",
         "avatar_type": "ellen",
-        "voice_id": "Cherry",
+        "voice_id": "longanhuan_v3.6",
         "personality": "轻松俏皮、反应灵动、表达自然，适合年轻游客互动、趣味问答和轻快的景区介绍。",
         "greeting": "您好！我是灵山胜境数字导游 Ellen，想了解景点、路线还是门票信息呢？",
     },
     "rabbitHole": {
         "name": "Rabbit Hole",
         "avatar_type": "rabbitHole",
-        "voice_id": "Cherry",
+        "voice_id": "longanhuan_v3.6",
         "personality": "活泼调皮、戏剧感强、反应夸张，适合趣味活动、互动演出和更有记忆点的游客交流。",
         "greeting": "您好！我是 Rabbit Hole，今天带您用更有趣的方式认识灵山胜境！",
     },
     "fuxuan": {
         "name": "Fu Xuan",
         "avatar_type": "fuxuan",
-        "voice_id": "Cherry",
+        "voice_id": "longanhuan_v3.6",
         "personality": "沉稳理性、表达精准、节奏从容，适合文化历史讲解、路线规划和需要可信度的服务场景。",
         "greeting": "您好！我是灵山胜境数字导游 Fu Xuan，我会为您准确介绍景区文化与游览建议。",
     },
     "huohuo": {
         "name": "Huo Huo",
         "avatar_type": "huohuo",
-        "voice_id": "Cherry",
+        "voice_id": "longanhuan_v3.6",
         "personality": "温柔谨慎、真诚耐心、语气柔和，适合解答游客困惑、安抚情绪和陪伴式景区导览。",
         "greeting": "您好！我是灵山胜境数字导游 Huo Huo，我会耐心陪您了解景区信息。",
     },
@@ -202,7 +217,7 @@ def _apply_preset(config: AvatarConfig, preset_key: str) -> None:
     preset = AVATAR_PRESETS[preset_key]
     config.name = preset["name"]
     config.avatar_type = preset["avatar_type"]
-    config.voice_id = config.voice_id or preset["voice_id"]
+    config.voice_id = preset["voice_id"] if config.voice_id in LEGACY_TTS_VOICE_IDS else (config.voice_id or preset["voice_id"])
     config.personality = preset["personality"]
     config.greeting = preset["greeting"]
 
@@ -228,6 +243,16 @@ def _ensure_default_avatar(db: Session, avatars: list[AvatarConfig]) -> list[Ava
 
     migrated = False
     for avatar in avatars:
+        if avatar.voice_id in LEGACY_TTS_VOICE_IDS:
+            logger.info(
+                "admin avatar migrate legacy voice id=%s old_voice_id=%s new_voice_id=%s",
+                avatar.id,
+                avatar.voice_id,
+                DEFAULT_TTS_VOICE_ID,
+            )
+            avatar.voice_id = DEFAULT_TTS_VOICE_ID
+            migrated = True
+
         target_type = _legacy_target_type(avatar)
         if not target_type:
             continue
@@ -260,7 +285,7 @@ def _ensure_default_avatar(db: Session, avatars: list[AvatarConfig]) -> list[Ava
 class AvatarConfigCreate(BaseModel):
     name: str = DEFAULT_AVATAR["name"]
     avatar_type: str = DEFAULT_AVATAR["avatar_type"]
-    voice_id: str = "Cherry"
+    voice_id: str = "longanhuan_v3.6"
     personality: str = DEFAULT_AVATAR["personality"]
     greeting: str = DEFAULT_AVATAR["greeting"]
 

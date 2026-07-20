@@ -54,7 +54,7 @@ class AvatarConfig(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100))
     avatar_type = Column(String(50))  # lingxi/yumi/strawberryBunny/bingtang/ellen/rabbitHole/fuxuan/huohuo/custom
-    voice_id = Column(String(100), default="Cherry")
+    voice_id = Column(String(100), default="longanhuan_v3.6")
     voice_style = Column(String(50), default="friendly")
     personality = Column(Text)  # 性格描述
     greeting = Column(Text)  # 欢迎语

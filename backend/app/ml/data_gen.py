@@ -46,7 +46,7 @@ def gen_one(text: str, voice: str = "Cherry", idx: int = 0):
     """生成一条训练样本"""
     print(f"[{idx}] TTS: {text[:30]}...")
     response = dashscope.MultiModalConversation.call(
-        model="qwen3-tts-flash",
+        model="qwen-audio-3.0-tts-flash",
         text=text,
         voice=voice,
         api_key=settings.DASHSCOPE_API_KEY,

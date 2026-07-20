@@ -88,13 +88,30 @@ const AVATAR_PRESETS = {
 
 const AVATAR_OPTIONS = Object.entries(AVATAR_PRESETS).map(([id, preset]) => ({ id, ...preset }))
 const LEGACY_AVATAR_TYPES = new Set(['guide_female', 'guide_male', 'ancient', 'modern'])
+const DEFAULT_VOICE_ID = 'longanhuan_v3.6'
+const LEGACY_VOICE_IDS = new Set([
+  'Cherry',
+  'Serena',
+  'Ethan',
+  'Chelsie',
+  'Momo',
+  'Moon',
+  'zh-CN-XiaohanNeural',
+  'zh-CN-YunxiNeural',
+  'zh-CN-YunjianNeural',
+  'zh-CN-YunyangNeural',
+])
 
 const DEFAULT_FORM = {
   name: AVATAR_PRESETS.lingxi.name,
   avatar_type: 'lingxi',
   personality: AVATAR_PRESETS.lingxi.personality,
   greeting: AVATAR_PRESETS.lingxi.greeting,
-  voice_id: 'Cherry',
+  voice_id: DEFAULT_VOICE_ID,
+}
+
+function normalizeVoiceId(voiceId) {
+  return LEGACY_VOICE_IDS.has(voiceId) ? DEFAULT_VOICE_ID : (voiceId || DEFAULT_VOICE_ID)
 }
 
 function getAvatarMeta(avatarType) {
@@ -124,7 +141,7 @@ function normalizeAvatarConfig(config) {
       is_active: config.is_active,
       created_at: config.created_at,
       ...DEFAULT_FORM,
-      voice_id: config.voice_id || DEFAULT_FORM.voice_id,
+      voice_id: normalizeVoiceId(config.voice_id),
     }
   }
 
@@ -138,6 +155,7 @@ function normalizeAvatarConfig(config) {
       voice_id: DEFAULT_FORM.voice_id,
     } : DEFAULT_FORM),
     ...config,
+    voice_id: normalizeVoiceId(config.voice_id),
   }
 }
 
@@ -157,7 +175,7 @@ function toAvatarPayload(form) {
   return {
     name: form.name,
     avatar_type: form.avatar_type,
-    voice_id: form.voice_id,
+    voice_id: normalizeVoiceId(form.voice_id),
     personality: form.personality,
     greeting: form.greeting,
   }
@@ -392,11 +410,7 @@ export default function Avatar({ showToast }) {
                   <option key={v.id} value={v.id}>{v.name}（{v.style}）</option>
                 ))
                 : <>
-                  <option value="Cherry">晓晓（温柔亲切）</option>
-                  <option value="zh-CN-XiaohanNeural">晓涵（活泼开朗）</option>
-                  <option value="zh-CN-YunxiNeural">云希（阳光活力）</option>
-                  <option value="zh-CN-YunjianNeural">云健（磁性稳重）</option>
-                  <option value="zh-CN-YunyangNeural">云扬（专业播报）</option>
+                  <option value="longanhuan_v3.6">龙安欢（自然亲切）</option>
                 </>
               }
             </Select>

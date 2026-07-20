@@ -50,8 +50,11 @@ class Settings(BaseSettings):
     CHROMA_DB_DIR: str = "./chroma_db"
 
     # ── 语音合成 ─
-    TTS_PROVIDER: str = "edge-tts"
-    TTS_MODEL: str = "qwen3-tts-flash"
+    TTS_PROVIDER: str = "dashscope"
+    TTS_MODEL: str = "qwen-audio-3.0-tts-flash"
+    TTS_VOICE: str = "longanhuan_v3.6"
+    TTS_INSTRUCTION: str = ""
+    DASHSCOPE_TTS_WS_URL: str = ""
 
     # ── 数字人 ─
     DEFAULT_AVATAR: str = "lingxi"

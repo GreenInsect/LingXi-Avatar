@@ -9,7 +9,7 @@ router = APIRouter()
 
 class TTSRequest(BaseModel):
     text: str
-    voice_id: str = "Cherry"
+    voice_id: str = "longanhuan_v3.6"
     emotion: str = "cheerful"
 
 @router.post("/synthesize")

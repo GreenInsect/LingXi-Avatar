@@ -307,7 +307,7 @@ async def _build_audio_and_mouth_shapes(
         logger.warning("chat tts skipped reason=empty_tts_text")
         return audio_base64, audio_duration, mouth_shapes
 
-    voice_id = request.avatar_voice_id or (avatar_config_db.voice_id if avatar_config_db else "Cherry")
+    voice_id = request.avatar_voice_id or (avatar_config_db.voice_id if avatar_config_db else settings.TTS_VOICE)
     tts_start = time.perf_counter()
     logger.info(
         "chat tts stage start voice_id=%s emotion=%s text_chars=%s text=%s",
